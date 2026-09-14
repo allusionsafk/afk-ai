@@ -1,6 +1,6 @@
 # AFK LocalAI support
 
-The current public AFK AI Friend Beta is `0.1.7rc1`. The repository also
+The current public AFK AI Beta is `0.1.7rc1`. The repository also
 contains an unpublished `0.2.0-rc1` source candidate; always report the exact
 version, tag, branch, or commit you tested.
 
@@ -20,7 +20,7 @@ and hardware problems.
 | Model runtime | Ollama for Windows |
 | Recommended free disk | About 40 GB for a comfortable first install |
 
-The public Friend Beta is pinned separately from development branches and pull
+The public Beta is pinned separately from development branches and pull
 requests.
 
 ## Installation or setup
