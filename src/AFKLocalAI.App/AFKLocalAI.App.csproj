@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AssemblyName>AFKLocalAI</AssemblyName>
+    <RootNamespace>AFKLocalAI.App</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Version>0.2.0-rc1</Version>
+    <FileVersion>0.2.0.0</FileVersion>
+    <AssemblyVersion>0.2.0.0</AssemblyVersion>
+    <Product>AFK LocalAI</Product>
+    <Company>AFK</Company>
+  </PropertyGroup>
+  <ItemGroup>
+    <Content Include="..\..\installer\version.json" Link="version.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\installer\*.ps1" Link="installer\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\ai-common.ps1" Link="ai-common.ps1" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

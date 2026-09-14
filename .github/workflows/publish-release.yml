@@ -1,0 +1,119 @@
+name: Publish Certified AFK LocalAI Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Successful manual release-candidate workflow run on the default branch
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    name: Publish previously certified bytes
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - name: Verify candidate run provenance
+        id: provenance
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if ($env:CANDIDATE_RUN_ID -notmatch '^\d+$') { throw 'Candidate run ID must be numeric.' }
+          $run = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:CANDIDATE_RUN_ID" | ConvertFrom-Json
+          if ($run.name -ne 'AFK LocalAI Release Candidate' -or $run.event -ne 'workflow_dispatch' -or $run.conclusion -ne 'success') {
+            throw 'Only a successful manually dispatched AFK LocalAI release-candidate run can be published.'
+          }
+          if ($run.head_repository.full_name -ne $env:GITHUB_REPOSITORY -or $run.head_branch -ne $env:DEFAULT_BRANCH) {
+            throw 'Candidate must originate from this repository and its default branch.'
+          }
+          "source_sha=$($run.head_sha)" >> $env:GITHUB_OUTPUT
+
+      - name: Check out the certified source revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ steps.provenance.outputs.source_sha }}
+
+      - name: Download certified candidate artifact
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+        run: gh run download $env:CANDIDATE_RUN_ID --name afk-localai-release-candidate --dir ./certified
+
+      - name: Verify exact bytes and lifecycle evidence
+        id: verify
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ steps.provenance.outputs.source_sha }}
+        run: |
+          $version = Get-Content ./installer/version.json -Raw | ConvertFrom-Json
+          if ($version.channel -notin @('prerelease', 'stable')) { throw "Unsupported release channel '$($version.channel)'." }
+          $installer = Join-Path ./certified $version.installer_name
+          $sidecar = "$installer.sha256.txt"
+          $payloadManifest = "$installer.payload-manifest.json"
+          foreach ($path in @($installer, $sidecar, $payloadManifest, './certified/lifecycle-report.json', './certified/lifecycle-upgrade-report.json')) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Certified artifact is incomplete: $path" }
+          }
+          $sidecarLine = (Get-Content -LiteralPath $sidecar -Raw).Trim()
+          if ($sidecarLine -notmatch '^([0-9A-Fa-f]{64})\s{2}(.+)$' -or $Matches[2] -ne $version.installer_name) { throw 'SHA-256 sidecar format or filename is invalid.' }
+          $expectedHash = $Matches[1].ToUpperInvariant()
+          $actualHash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToUpperInvariant()
+          if ($actualHash -ne $expectedHash) { throw "Certified installer SHA-256 mismatch: $actualHash" }
+          $lifecycle = Get-Content ./certified/lifecycle-report.json -Raw | ConvertFrom-Json
+          $upgrade = Get-Content ./certified/lifecycle-upgrade-report.json -Raw | ConvertFrom-Json
+          $manifest = Get-Content -LiteralPath $payloadManifest -Raw | ConvertFrom-Json
+          if (-not $lifecycle.certified -or $lifecycle.certified_sha256 -ne $expectedHash -or $lifecycle.artifact_name -ne $version.installer_name) {
+            throw 'Exact-installer lifecycle evidence does not certify these bytes.'
+          }
+          if (-not $upgrade.certified -or $upgrade.candidate_version -ne $version.display_version) { throw 'Upgrade lifecycle evidence is not certified for this version.' }
+          if ($manifest.source_commit -ne $env:SOURCE_SHA.ToLowerInvariant()) { throw 'Payload source commit does not match the certified workflow revision.' }
+          "tag=v$($version.display_version)" >> $env:GITHUB_OUTPUT
+          "title=AFK LocalAI $($version.display_version)" >> $env:GITHUB_OUTPUT
+          "channel=$($version.channel)" >> $env:GITHUB_OUTPUT
+          "installer=$installer" >> $env:GITHUB_OUTPUT
+          "sidecar=$sidecar" >> $env:GITHUB_OUTPUT
+          "payload_manifest=$payloadManifest" >> $env:GITHUB_OUTPUT
+
+      - name: Refuse release or tag overwrite
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.verify.outputs.tag }}
+        run: |
+          gh release view $env:RELEASE_TAG 2>$null
+          if ($LASTEXITCODE -eq 0) { throw "Release '$env:RELEASE_TAG' already exists." }
+          gh api "repos/$env:GITHUB_REPOSITORY/git/ref/tags/$env:RELEASE_TAG" 2>$null
+          if ($LASTEXITCODE -eq 0) { throw "Tag '$env:RELEASE_TAG' already exists." }
+          exit 0
+
+      - name: Publish prerelease without rebuilding
+        if: steps.verify.outputs.channel == 'prerelease'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.provenance.outputs.source_sha }}
+          RELEASE_TAG: ${{ steps.verify.outputs.tag }}
+          RELEASE_TITLE: ${{ steps.verify.outputs.title }}
+        run: |
+          $assets = @('${{ steps.verify.outputs.installer }}', '${{ steps.verify.outputs.sidecar }}', '${{ steps.verify.outputs.payload_manifest }}', './certified/lifecycle-report.json', './certified/lifecycle-upgrade-report.json')
+          gh release create $env:RELEASE_TAG @assets --target $env:SOURCE_SHA --title $env:RELEASE_TITLE --notes-file "./docs/releases/$($env:RELEASE_TAG.Substring(1)).md" --prerelease --latest=false
+
+      - name: Publish stable release without rebuilding
+        if: steps.verify.outputs.channel == 'stable'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.provenance.outputs.source_sha }}
+          RELEASE_TAG: ${{ steps.verify.outputs.tag }}
+          RELEASE_TITLE: ${{ steps.verify.outputs.title }}
+        run: |
+          $assets = @('${{ steps.verify.outputs.installer }}', '${{ steps.verify.outputs.sidecar }}', '${{ steps.verify.outputs.payload_manifest }}', './certified/lifecycle-report.json', './certified/lifecycle-upgrade-report.json')
+          gh release create $env:RELEASE_TAG @assets --target $env:SOURCE_SHA --title $env:RELEASE_TITLE --notes-file "./docs/releases/$($env:RELEASE_TAG.Substring(1)).md" --latest

@@ -11,44 +11,231 @@
 
 # ---------------------------------------------------------------- state file
 
+# Schema version of installer-state.json. v1 -> v2 turned `pending_reboot` from a
+# bare boolean into { required, reason } and added the `preflight` checkpoint.
+$script:InstallerStateVersion = 2
+
+# Phases that prove something about the LIVE machine. Persisted state is a resume
+# hint and an audit record - never proof that the environment is still ready - so
+# these are re-run on every attempt and are never recorded as done.
+$script:InstallerAlwaysRunPhases = @('environment-preflight', 'environment-ready')
+
 function Get-InstallerStatePath {
   param([string]$Root = $PSScriptRoot)
   return (Join-Path $Root 'installer-state.json')
 }
 
-function Import-InstallerState {
-  # Read the resume/audit state, or a fresh skeleton when none exists.
-  param([Parameter(Mandatory)][string]$Path)
-  if (Test-Path -LiteralPath $Path) {
-    try {
-      return (Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json)
-    } catch {
-      throw "installer-state.json is corrupt ($($_.Exception.Message)); delete it to restart."
-    }
-  }
+function New-InstallerState {
+  # A fresh skeleton at the current schema version.
   return [pscustomobject]@{
-    version        = 1
+    version        = $script:InstallerStateVersion
     phases_done    = @()
     hardware       = $null
     intent         = @()
     models         = [pscustomobject]@{}
-    pending_reboot = $false
+    preflight      = $null
+    recovery       = $null
+    legacy_install = [pscustomobject]@{ detected = $false }
+    pending_reboot = [pscustomobject]@{ required = $false; reason = $null }
   }
 }
 
+function ConvertTo-CurrentInstallerState {
+  # Migrate an imported object forward conservatively: keep every product choice
+  # that is still meaningful, and never invent readiness that was not recorded.
+  param([Parameter(Mandatory)]$Raw)
+  $state = New-InstallerState
+  foreach ($name in @('phases_done', 'hardware', 'intent', 'models', 'preflight', 'recovery', 'legacy_install')) {
+    $prop = $Raw.PSObject.Properties[$name]
+    if ($prop -and $null -ne $prop.Value) { $state.$name = $prop.Value }
+  }
+  # Safety-critical phases from an older run are dropped: they describe a machine
+  # state that a rerun must re-observe, not a completed piece of work.
+  $state.phases_done = @(@($state.phases_done) | Where-Object { $_ -and $_ -notin $script:InstallerAlwaysRunPhases })
+
+  $pending = $Raw.PSObject.Properties['pending_reboot']
+  if ($pending -and $null -ne $pending.Value) {
+    $value = $pending.Value
+    if ($value -is [bool]) {
+      # v1 recorded only "a reboot is pending", and the only writer was the
+      # Docker Desktop checkpoint - so that is the honest reason to record.
+      $state.pending_reboot = [pscustomobject]@{
+        required = [bool]$value
+        reason   = $(if ($value) { 'legacy-docker-desktop-setup' } else { $null })
+      }
+    } else {
+      $required = $value.PSObject.Properties['required']
+      $reason = $value.PSObject.Properties['reason']
+      $state.pending_reboot = [pscustomobject]@{
+        required = [bool]($(if ($required) { $required.Value } else { $false }))
+        reason   = $(if ($reason) { $reason.Value } else { $null })
+      }
+    }
+  }
+  return $state
+}
+
+function Import-InstallerState {
+  <#
+    Read the resume/audit state.
+
+    Corrupt state is quarantined beside the original and replaced with a safe
+    skeleton, rather than telling a customer to work out which file to delete.
+    A state written by a NEWER AFK AI fails closed: silently reinterpreting a
+    schema we do not understand is how false readiness gets invented.
+  #>
+  param([Parameter(Mandatory)][string]$Path)
+  if (-not (Test-Path -LiteralPath $Path)) { return (New-InstallerState) }
+
+  $raw = $null
+  try {
+    $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    $stamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ')
+    $quarantine = Join-Path (Split-Path -Parent $Path) `
+      ("{0}.corrupt-{1}.json" -f [System.IO.Path]::GetFileNameWithoutExtension($Path), $stamp)
+    # Quarantining can fail (file locked by another run, read-only directory).
+    # That must not become a second failure on top of the first, but it does
+    # change what we can honestly tell the user.
+    $setAside = $true
+    try {
+      Move-Item -LiteralPath $Path -Destination $quarantine -Force -ErrorAction Stop
+    } catch {
+      $setAside = $false
+      Write-Verbose "Could not quarantine corrupt installer state: $($_.Exception.Message)"
+    }
+    if ($setAside) {
+      Write-Host '   Saved setup state was unreadable; it has been set aside and AFK AI will start it fresh.' -ForegroundColor Yellow
+    } else {
+      Write-Host '   Saved setup state was unreadable; AFK AI will start it fresh and overwrite it.' -ForegroundColor Yellow
+    }
+    return (New-InstallerState)
+  }
+  if ($null -eq $raw) { return (New-InstallerState) }
+
+  $version = 1
+  $vProp = $raw.PSObject.Properties['version']
+  if ($vProp -and $null -ne $vProp.Value) { $version = [int]$vProp.Value }
+  if ($version -gt $script:InstallerStateVersion) {
+    throw "This setup state was written by a newer version of AFK AI (state format $version, this build understands $($script:InstallerStateVersion)). Install the newer AFK AI, or move installer-state.json aside to start fresh."
+  }
+  return (ConvertTo-CurrentInstallerState -Raw $raw)
+}
+
 function Save-InstallerState {
+  <#
+    Crash-consistent replacement: serialize, validate, write a same-directory
+    temp file, then atomically replace the target. An interrupted run must leave
+    either the previous complete state or the new complete state - never half a
+    JSON document, which the next run would quarantine and discard.
+  #>
   [CmdletBinding(SupportsShouldProcess)]
   param(
     [Parameter(Mandatory)]$State,
     [Parameter(Mandatory)][string]$Path
   )
-  if ($PSCmdlet.ShouldProcess($Path, 'write installer state')) {
-    $State | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $Path -Encoding UTF8
+  if (-not $PSCmdlet.ShouldProcess($Path, 'write installer state')) { return }
+
+  $convertWarnings = $null
+  $json = $State | ConvertTo-Json -Depth 8 -WarningAction SilentlyContinue -WarningVariable convertWarnings
+  if ($convertWarnings) {
+    # Depth truncation would silently drop fields; refuse rather than persist a
+    # lossy state that a later run would trust.
+    throw "Refusing to write installer state: it could not be serialized completely ($($convertWarnings[0]))."
   }
+  $reparsed = $null
+  try { $reparsed = $json | ConvertFrom-Json -ErrorAction Stop } catch {
+    throw "Refusing to write installer state: serialized form did not parse back ($($_.Exception.Message))."
+  }
+  if ($null -eq $reparsed -or $null -eq $reparsed.PSObject.Properties['version']) {
+    throw 'Refusing to write installer state: serialized form is missing its schema version.'
+  }
+  if (@($reparsed.phases_done).Count -ne @($State.phases_done).Count) {
+    throw 'Refusing to write installer state: completed phases did not survive serialization.'
+  }
+
+  $dir = Split-Path -Parent $Path
+  if (-not $dir) { $dir = '.' }
+  if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
+    New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null
+  }
+  $temp = Join-Path $dir ("{0}.tmp-{1}" -f (Split-Path -Leaf $Path), [guid]::NewGuid().ToString('n'))
+  $backup = Join-Path $dir ("{0}.bak-{1}" -f (Split-Path -Leaf $Path), [guid]::NewGuid().ToString('n'))
+  try {
+    Set-Content -LiteralPath $temp -Value $json -Encoding UTF8 -ErrorAction Stop
+    # Read the temp file back before it becomes the only copy.
+    [void](Get-Content -LiteralPath $temp -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop)
+    # Windows PowerShell 5.1 runs on .NET Framework, whose File.Move has no
+    # three-argument overwrite overload. File.Replace is atomic on the same
+    # volume and is available there; the two-argument Move handles first write.
+    if (Test-Path -LiteralPath $Path -PathType Leaf) {
+      [System.IO.File]::Replace($temp, $Path, $backup)
+      Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+    } else {
+      [System.IO.File]::Move($temp, $Path)
+    }
+  } catch {
+    Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+    throw
+  }
+}
+
+# ------------------------------------------------------- structured event stream
+
+$script:InstallerEventStreamEnabled = $false
+
+function Set-InstallerEventStream {
+  param([bool]$Enabled)
+  $script:InstallerEventStreamEnabled = $Enabled
+}
+
+function Write-InstallerEvent {
+  <# Emit one versioned line for the native AFK LocalAI shell. #>
+  param(
+    [Parameter(Mandatory)][string]$EventType,
+    [Parameter(Mandatory)][string]$Phase,
+    [string]$Status = '',
+    [string]$Code = '',
+    [string]$Message = '',
+    $Data = $null,
+    [switch]$Enabled
+  )
+  if (-not ($Enabled -or $script:InstallerEventStreamEnabled)) { return }
+  $payload = [ordered]@{
+    schema_version = 1
+    timestamp_utc = [DateTime]::UtcNow.ToString('o')
+    event_type = $EventType
+    phase = $Phase
+    status = $Status
+    code = $Code
+    message = $Message
+  }
+  if ($null -ne $Data) { $payload.data = $Data }
+  Write-Output ('AFK-EVENT:' + ($payload | ConvertTo-Json -Depth 8 -Compress))
+}
+
+function Test-PreflightCheckpointIsProof {
+  <#
+    Always false, by design and by contract.
+
+    The persisted preflight checkpoint exists for resume messaging and support
+    diagnostics. It is never evidence that the machine is ready now: firmware,
+    Windows features, WSL and Docker can all change between runs, so readiness is
+    only ever established by a fresh live probe.
+  #>
+  param([Parameter(Mandatory)]$State)
+  $recorded = $null
+  if ($State -and $State.PSObject.Properties['preflight']) { $recorded = $State.preflight }
+  if ($null -ne $recorded) {
+    Write-Verbose "Ignoring persisted preflight verdict '$($recorded.overall)' from $($recorded.observed_at): readiness is only ever established by a fresh live probe."
+  }
+  return $false
 }
 
 function Test-PhaseDone {
   param([Parameter(Mandatory)]$State, [Parameter(Mandatory)][string]$Phase)
+  if ($Phase -in $script:InstallerAlwaysRunPhases) { return $false }
   return (@($State.phases_done) -contains $Phase)
 }
 
@@ -59,6 +246,7 @@ function Set-PhaseDone {
     [Parameter(Mandatory)][string]$Phase,
     [Parameter(Mandatory)][string]$Path
   )
+  if ($Phase -in $script:InstallerAlwaysRunPhases) { return }
   if (Test-PhaseDone -State $State -Phase $Phase) { return }
   if ($PSCmdlet.ShouldProcess($Phase, 'mark phase done')) {
     $State.phases_done = @($State.phases_done) + $Phase

@@ -1,6 +1,8 @@
-# Security policy
+# AFK LocalAI security policy
 
-AFK AI is Friend Beta software. Please report security or privacy problems that could affect the installer, local services, diagnostics, updates, download integrity, or user data.
+AFK AI is Friend Beta software. Please report security or privacy problems that
+could affect the installer, local service boundary, diagnostics, updates,
+download integrity, or user data.
 
 ## Report privately
 
@@ -9,15 +11,18 @@ Use GitHub private vulnerability reporting:
 https://github.com/allusionsafk/localai-windows-starter/security/advisories/new
 
 > [!CAUTION]
-> Do not publish exploit details, credentials, private logs, chat content, documents, `.env` values, tokens, cookies, or other sensitive material in a normal GitHub issue.
+> Do not publish exploit details, credentials, private logs, chat content,
+> documents, `.env` values, tokens, cookies, or other sensitive material in a
+> normal GitHub issue.
 
 ## In scope
 
 Examples include:
 
 - bypasses of installer or release integrity checks
-- local services becoming reachable outside the intended network scope without explicit opt-in
-- credential, prompt, chat, document, or file-content leakage
+- local services becoming reachable outside the intended local network boundary
+  without explicit opt-in
+- credential, secret, prompt, chat, document, or file-content leakage
 - command injection or unsafe privilege changes
 - unexpected system modification
 - unsafe update or dependency behaviour
@@ -36,10 +41,15 @@ Please provide:
 7. security or privacy impact
 8. a sanitised diagnostic excerpt when necessary
 
-Before sharing logs or screenshots, remove usernames, private paths, unrelated host details, credentials, tokens, cookies, API keys, prompts, chats, and documents.
+Before sharing logs or screenshots, remove usernames, private paths, unrelated
+host details, credentials, tokens, cookies, API keys, prompts, chats, and
+documents.
 
 ## Version scope
 
-The current public Friend Beta is `v0.1.7rc1`. Development on `master` can be newer, so reports should identify the exact tag or commit tested.
+The current public Friend Beta is `v0.1.7rc1`. The repository also contains an
+unpublished `v0.2.0-rc1` source candidate. Development on `master` can move ahead
+of either record, so every report should identify the exact tag or commit tested.
 
-For installation, hardware, or ordinary product bugs, use [SUPPORT.md](SUPPORT.md).
+For installation, hardware, or ordinary product bugs, use
+[SUPPORT.md](SUPPORT.md).

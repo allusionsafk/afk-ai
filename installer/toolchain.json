@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "inno_setup": {
+    "package_id": "JRSoftware.InnoSetup",
+    "version": "6.7.3",
+    "installer_sha256": "9C73C3BAE7ED48D44112A0F48E66742C00090BDB5BEF71D9D3C056C66E97B732"
+  }
+}

@@ -1,4 +1,24 @@
-name: localai
+# Compose project identity. This is AFK LocalAI's OWN namespace and must not be
+# a name another checkout on the same machine can also claim.
+#
+# It used to be "localai". A private engineering workbench on the development
+# machine ships its own compose file that also declares "localai", so both
+# resolved to the same project: the same container names (localai-open-webui-1),
+# the same network, and - the part that actually broke the product - the same
+# volumes (localai_open-webui). Starting AFK therefore recreated the workbench's
+# containers against the workbench's THREE-MONTH-OLD Open WebUI database. Its
+# backend then returned HTTP 500 from /api/config while still serving the static
+# frontend, which is what produces Open WebUI's "Backend Required (frontend
+# only)" screen.
+#
+# Ownership is still decided by the config-file path label, never by this name -
+# see src/localai/afk_ownership.py. This makes the two projects genuinely
+# separate rather than merely distinguishable after the fact.
+#
+# Renaming moves this stack to afk-localai_* volumes. Data written by an earlier
+# release under localai_* is NOT deleted; it is simply no longer mounted. See
+# docs/design/compose-project-identity.md to recover it.
+name: afk-localai
 
 # Self-contained local AI workspace:
 #   - Open WebUI (chat UI) on http://localhost:3000
@@ -8,7 +28,16 @@ name: localai
 
 services:
   open-webui:
-    image: ghcr.io/open-webui/open-webui:main
+    # Pinned by digest, not ":main". A certified installer cannot promise a
+    # working product if its core service image can change underneath it between
+    # the lifecycle qualification and the user's first run. This digest is the
+    # build labelled revision 01f4282f1ffe0d6212f58d3afbeae21fffd0c4be
+    # (image created 2026-07-27), which reports Open WebUI 0.11.0 and was
+    # qualified here against a fresh AFK-owned volume: /health 200 and
+    # /api/config 200, the endpoint that returned 500 on the inherited database.
+    # Update deliberately: re-pin, re-run the backend readiness gate, and check
+    # the Open WebUI schema migration against an existing volume first.
+    image: ghcr.io/open-webui/open-webui@sha256:6a773e5c3a246b65cbe74ce942b294292c0e5f81c138f703d111bc162f7d7c3d
     depends_on:
       searxng:
         condition: service_healthy

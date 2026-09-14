@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "product_name": "AFK LocalAI",
+  "executable_name": "AFKLocalAI.exe",
+  "installer_name": "AFKLocalAISetup-0.2.0-rc1-x64.exe",
+  "display_version": "0.2.0-rc1",
+  "python_version": "0.2.0rc1",
+  "file_version": "0.2.0.0",
+  "channel": "prerelease",
+  "architecture": "x64",
+  "app_id": "{8A8A2D4D-CE75-4A2D-A39B-56B4206F93D0}",
+  "publisher": "AFK",
+  "repository": "https://github.com/allusionsafk/localai-windows-starter",
+  "support_url": "https://github.com/allusionsafk/localai-windows-starter/issues/new/choose"
+}

@@ -29,6 +29,10 @@ build/
 dist/
 *.egg-info/
 
+# --- .NET build artifacts ---
+**/bin/
+**/obj/
+
 # --- Windows OS cruft ---
 Thumbs.db
 desktop.ini

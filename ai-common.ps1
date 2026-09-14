@@ -16,6 +16,27 @@ function Resolve-AiCommandPath {
   return $Name
 }
 
+function ConvertTo-AiArgumentString {
+  <#
+    Quote an argument vector the way CommandLineToArgvW parses it back.
+
+    Needed because Windows PowerShell 5.1 runs on .NET Framework, which has no
+    ProcessStartInfo.ArgumentList - only the single Arguments string. Getting the
+    quoting wrong there silently corrupts every argument, so the rules are
+    applied explicitly: backslashes are literal except in the run immediately
+    before a quote, where they double.
+  #>
+  param([string[]]$Arguments = @())
+  $parts = foreach ($argument in @($Arguments)) {
+    $value = [string]$argument
+    if ($value -ne '' -and $value -notmatch '[\s"]') { $value; continue }
+    $escaped = [regex]::Replace($value, '(\\*)"', '$1$1\"')
+    $escaped = [regex]::Replace($escaped, '(\\+)$', '$1$1')
+    '"' + $escaped + '"'
+  }
+  return (@($parts) -join ' ')
+}
+
 function Invoke-AiProcess {
   # Run a process, capture stdout+stderr, enforce a timeout. Never throws.
   # Returns [pscustomobject]@{ Code; Text }. Code 124 = timed out, 1 = launch error.
@@ -34,7 +55,21 @@ function Invoke-AiProcess {
     $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
     if ($WorkingDirectory) { $psi.WorkingDirectory = $WorkingDirectory }
-    foreach ($arg in @($ArgumentList)) { [void]$psi.ArgumentList.Add([string]$arg) }
+    # Windows PowerShell 5.1 is .NET Framework, where ProcessStartInfo has no
+    # ArgumentList at all - $psi.ArgumentList is $null, and calling .Add() on it
+    # threw, so EVERY probe that passed arguments came back as exit 1 with the
+    # text "You cannot call a method on a null-valued expression."
+    #
+    # The environment preflight is deliberately 5.1-compatible so it can run
+    # before pwsh exists, and the shell launches it with powershell.exe. So on a
+    # real first run every wsl/docker probe failed identically: WSL looked
+    # outdated because `wsl --version` "returned" non-zero, Docker's endpoint
+    # looked unresolvable, and the whole check collapsed to PREFLIGHT-UNKNOWN.
+    if ($null -ne $psi.ArgumentList) {
+      foreach ($arg in @($ArgumentList)) { [void]$psi.ArgumentList.Add([string]$arg) }
+    } else {
+      $psi.Arguments = ConvertTo-AiArgumentString -Arguments @($ArgumentList)
+    }
 
     $p = [System.Diagnostics.Process]::new()
     $p.StartInfo = $psi

@@ -107,6 +107,104 @@ try {
 }
 }
 
+# 6b. Installer environment-preflight classifier + state regression suite.
+#     Fixture-only: it starts no Docker/WSL, changes no Windows state, and does
+#     not touch the network.
+$preflightTests = Join-Path $PSScriptRoot 'Test-InstallerPreflight.ps1'
+if (Test-Path -LiteralPath $preflightTests) {
+    $pwshPath = (Get-Process -Id $PID).Path
+    $pfOut = & $pwshPath -NoProfile -ExecutionPolicy Bypass -File $preflightTests 2>&1
+    $pfOk = ($LASTEXITCODE -eq 0)
+    $pfLines = @($pfOut | ForEach-Object { "$_" })
+    $pfSummary = @($pfLines | Where-Object { $_ -match 'PREFLIGHT TESTS' } | Select-Object -First 1)
+    $pfDetail = if ($pfSummary) { "$($pfSummary[0])".Trim() } else { ($pfLines | Select-Object -Last 1) }
+    if (-not $pfOk) { $pfDetail = (@($pfLines | Select-Object -Last 12) -join ' | ') }
+    Add-Result 'Installer preflight tests' $pfOk $pfDetail
+} else {
+    Add-Result 'Installer preflight tests' $true 'SKIPPED (Test-InstallerPreflight.ps1 not in this checkout)'
+}
+
+# 6b2. First-run state machine: machine evidence -> diagnosis -> bounded
+#      recovery -> checkpoint -> resume, as a transition matrix.
+$transitionTests = Join-Path $PSScriptRoot 'Test-FirstRunTransitions.ps1'
+if (Test-Path -LiteralPath $transitionTests) {
+    $pwshPath = (Get-Process -Id $PID).Path
+    $trOut = & $pwshPath -NoProfile -ExecutionPolicy Bypass -File $transitionTests 2>&1
+    $trOk = ($LASTEXITCODE -eq 0)
+    $trLines = @($trOut | ForEach-Object { "$_" })
+    $trSummary = @($trLines | Where-Object { $_ -match 'FIRST-RUN TRANSITION TESTS' } | Select-Object -First 1)
+    $trDetail = if ($trSummary) { "$($trSummary[0])".Trim() } else { ($trLines | Select-Object -Last 1) }
+    if (-not $trOk) { $trDetail = (@($trLines | Select-Object -Last 12) -join ' | ') }
+    Add-Result 'First-run transition matrix' $trOk $trDetail
+} else {
+    Add-Result 'First-run transition matrix' $true 'SKIPPED (Test-FirstRunTransitions.ps1 not in this checkout)'
+}
+
+# 6c. Bounded prerequisite recovery mapping, state, and event protocol.
+$recoveryTests = Join-Path $PSScriptRoot 'Test-InstallerRecovery.ps1'
+if (Test-Path -LiteralPath $recoveryTests) {
+    $pwshPath = (Get-Process -Id $PID).Path
+    $recoveryOut = & $pwshPath -NoProfile -ExecutionPolicy Bypass -File $recoveryTests 2>&1
+    $recoveryOk = ($LASTEXITCODE -eq 0)
+    $recoveryLines = @($recoveryOut | ForEach-Object { "$_" })
+    $recoverySummary = @($recoveryLines | Where-Object { $_ -match 'RECOVERY TESTS' } | Select-Object -First 1)
+    $recoveryDetail = if ($recoverySummary) { "$($recoverySummary[0])".Trim() } else { ($recoveryLines | Select-Object -Last 1) }
+    if (-not $recoveryOk) { $recoveryDetail = (@($recoveryLines | Select-Object -Last 12) -join ' | ') }
+    Add-Result 'Installer recovery tests' $recoveryOk $recoveryDetail
+}
+
+# 6d. Native installer and deterministic payload contracts.
+$installerTests = Join-Path $PSScriptRoot 'Test-InstallerContracts.ps1'
+if (Test-Path -LiteralPath $installerTests) {
+    $pwshPath = (Get-Process -Id $PID).Path
+    $installerOut = & $pwshPath -NoProfile -ExecutionPolicy Bypass -File $installerTests 2>&1
+    $installerOk = ($LASTEXITCODE -eq 0)
+    $installerLines = @($installerOut | ForEach-Object { "$_" })
+    $installerSummary = @($installerLines | Where-Object { $_ -match 'INSTALLER CONTRACTS' } | Select-Object -First 1)
+    $installerDetail = if ($installerSummary) { "$($installerSummary[0])".Trim() } else { ($installerLines | Select-Object -Last 1) }
+    if (-not $installerOk) { $installerDetail = (@($installerLines | Select-Object -Last 12) -join ' | ') }
+    Add-Result 'Installer distribution contracts' $installerOk $installerDetail
+}
+
+# 6e. Exact-artifact lifecycle harness fail-closed unit tests.
+$lifecycleTests = Join-Path $PSScriptRoot 'Test-LifecycleHarness.ps1'
+if (Test-Path -LiteralPath $lifecycleTests) {
+    $pwshPath = (Get-Process -Id $PID).Path
+    $lifecycleOut = & $pwshPath -NoProfile -ExecutionPolicy Bypass -File $lifecycleTests 2>&1
+    $lifecycleOk = ($LASTEXITCODE -eq 0)
+    $lifecycleLines = @($lifecycleOut | ForEach-Object { "$_" })
+    $lifecycleSummary = @($lifecycleLines | Where-Object { $_ -match 'LIFECYCLE HARNESS TESTS' } | Select-Object -First 1)
+    $lifecycleDetail = if ($lifecycleSummary) { "$($lifecycleSummary[0])".Trim() } else { ($lifecycleLines | Select-Object -Last 1) }
+    if (-not $lifecycleOk) { $lifecycleDetail = (@($lifecycleLines | Select-Object -Last 12) -join ' | ') }
+    Add-Result 'Installer lifecycle harness tests' $lifecycleOk $lifecycleDetail
+}
+
+# 6f. Candidate/publish workflows must preserve tested-bits-equal-published-bits.
+$releaseWorkflowTests = Join-Path $PSScriptRoot 'Test-ReleaseWorkflowContracts.ps1'
+if (Test-Path -LiteralPath $releaseWorkflowTests) {
+    $pwshPath = (Get-Process -Id $PID).Path
+    $releaseOut = & $pwshPath -NoProfile -ExecutionPolicy Bypass -File $releaseWorkflowTests 2>&1
+    $releaseOk = ($LASTEXITCODE -eq 0)
+    $releaseLines = @($releaseOut | ForEach-Object { "$_" })
+    $releaseSummary = @($releaseLines | Where-Object { $_ -match 'RELEASE WORKFLOW CONTRACTS' } | Select-Object -First 1)
+    $releaseDetail = if ($releaseSummary) { "$($releaseSummary[0])".Trim() } else { ($releaseLines | Select-Object -Last 1) }
+    if (-not $releaseOk) { $releaseDetail = (@($releaseLines | Select-Object -Last 12) -join ' | ') }
+    Add-Result 'Release workflow contracts' $releaseOk $releaseDetail
+}
+
+# 6g. Public instructions must describe the native AFK LocalAI distribution.
+$productDocsTests = Join-Path $PSScriptRoot 'Test-ProductDocsContracts.ps1'
+if (Test-Path -LiteralPath $productDocsTests) {
+    $pwshPath = (Get-Process -Id $PID).Path
+    $docsOut = & $pwshPath -NoProfile -ExecutionPolicy Bypass -File $productDocsTests 2>&1
+    $docsOk = ($LASTEXITCODE -eq 0)
+    $docsLines = @($docsOut | ForEach-Object { "$_" })
+    $docsSummary = @($docsLines | Where-Object { $_ -match 'PRODUCT DOCS CONTRACTS' } | Select-Object -First 1)
+    $docsDetail = if ($docsSummary) { "$($docsSummary[0])".Trim() } else { ($docsLines | Select-Object -Last 1) }
+    if (-not $docsOk) { $docsDetail = (@($docsLines | Select-Object -Last 12) -join ' | ') }
+    Add-Result 'Product documentation contracts' $docsOk $docsDetail
+}
+
 # 7. Static analysis: zero Error-severity, and no NEW automatic-variable
 #    assignments beyond the known legacy baseline (burndown list in AGENTS.md).
 $autoVarBaseline = 0    # all known automatic-variable shadows fixed; any new hit fails the gate.

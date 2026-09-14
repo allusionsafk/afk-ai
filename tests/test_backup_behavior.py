@@ -23,7 +23,7 @@ def test_docker_backup_args_use_pinned_busybox_and_default_volume() -> None:
         "run",
         "--rm",
         "-v",
-        "localai_open-webui:/data",
+        "afk-localai_open-webui:/data",
         "-v",
         f"{dest}:/backup",
         backup.BUSYBOX_IMAGE,
@@ -59,7 +59,10 @@ def test_resolve_volume_prefers_compose_then_falls_back(
     monkeypatch.setattr(compose, "service_volume_name", lambda *a, **k: "live-vol")
     assert backup.resolve_volume() == "live-vol"
     monkeypatch.setattr(compose, "service_volume_name", lambda *a, **k: None)
-    assert backup.resolve_volume() == "localai_open-webui"
+    # The fallback must name THIS project's volume. "localai_open-webui" belongs
+    # to the compose project "localai", which a private engineering workbench on a
+    # developer machine also claims - backing up, or restoring over, its data.
+    assert backup.resolve_volume() == "afk-localai_open-webui"
 
 
 def test_backup_docker_failure_matches_capture(

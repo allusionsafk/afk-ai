@@ -18,9 +18,11 @@ from localai.health import collect_health_report
 from localai.installer_vet import collect_vet_report
 from localai.model_aliases import collect_model_aliases_report
 from localai.model_scout import collect_model_scout_report
+from localai.paths import REPO_ROOT
 from localai.perf import collect_perf_report
 from localai.power import collect_power_report
 from localai.public_audit import collect_public_audit_report
+from localai.readiness import READY, collect_product_status
 from localai.start import collect_start_report
 from localai.stop import collect_stop_report
 from localai.terminal_check import collect_terminal_check_report
@@ -252,6 +254,52 @@ def game_mode(
     for line in lines:
         typer.echo(line)
     raise typer.Exit(code=code)
+
+
+@app.command()
+def status(
+    program_root: Annotated[
+        str,
+        typer.Option("--program-root", help="This installation's own directory."),
+    ] = "",
+    model: Annotated[
+        str,
+        typer.Option("--model", help="Model the product is configured to use."),
+    ] = "",
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit one machine-readable status object."),
+    ] = False,
+    skip_inference: Annotated[
+        bool,
+        typer.Option("--skip-inference", help="Do not run the tiny test generation."),
+    ] = False,
+) -> None:
+    """Report whether the local AI is actually usable right now.
+
+    This is the product's own readiness answer, not a prerequisite check: it
+    asks the Open WebUI BACKEND, Ollama, and the model itself. A machine whose
+    Windows, WSL and Docker checks are all green is still not READY here if
+    chat cannot work.
+    """
+    root = program_root or str(REPO_ROOT)
+    snapshot = collect_product_status(
+        program_root=root,
+        configured_model=model or None,
+        verify_inference=not skip_inference,
+    )
+    if json_output:
+        typer.echo(snapshot.to_json())
+    else:
+        typer.echo(f"==== AFK LocalAI status ====  {snapshot.state}")
+        typer.echo(snapshot.message)
+        typer.echo("")
+        for service in snapshot.services:
+            typer.echo(f"  {service.name:<12} {service.state:<12} {service.detail}")
+        if snapshot.human_signup_complete is False:
+            typer.echo("")
+            typer.echo("  Open WebUI still needs its first local account.")
+    raise typer.Exit(code=0 if snapshot.state == READY else 1)
 
 
 @app.command()
