@@ -3,7 +3,7 @@
 This directory contains release records, product contracts, design records, and
 focused technical guides for AFK AI for Windows.
 
-For the normal public Friend Beta entry point, start with the repository
+For the normal public Beta entry point, start with the repository
 [README](../README.md). For help, use [SUPPORT.md](../SUPPORT.md). Security
 reports belong in [SECURITY.md](../SECURITY.md).
 
@@ -11,7 +11,7 @@ reports belong in [SECURITY.md](../SECURITY.md).
 
 | Document | Purpose |
 |---|---|
-| [Friend Beta 0.1.7rc1](releases/0.1.7rc1.md) | Pinned public candidate, qualification status, and known limitations |
+| [Beta 0.1.7rc1](releases/0.1.7rc1.md) | Pinned public candidate, qualification status, and known limitations |
 | [Installer guide](../installer/README.md) | Bootstrap and installer architecture |
 | [Virtualization and Docker preflight](design/virtualization-docker-preflight.md) | Reviewed first-run classification and recovery contract |
 | [WebBrain guide](webbrain.md) | Browser and search integration, privacy boundary, and network behaviour |
@@ -42,7 +42,7 @@ release record, and relevant pull request before making a runtime claim.
 
 `releases/` describes named candidates. Release records are historical.
 Development branches and open pull requests can move ahead of the
-website-pinned Friend Beta without changing what users download.
+website-pinned Beta without changing what users download.
 
 ## Engineering plans
 
@@ -55,8 +55,10 @@ accepted contracts, and release evidence take precedence over older plans.
 
 Public documentation should:
 
-- use **AFK AI** for the current public Friend Beta and preserve exact
-  **AFK LocalAI** identifiers used by the `0.2.0-rc1` source candidate
+- use **AFK AI** for the current public Beta and preserve exact **AFK LocalAI**
+  identifiers used by the `0.2.0-rc1` source candidate
+- use professional literal status language such as **Beta** or **Release candidate**
+  and keep the exact version/tag separate from the status label
 - separate the website-pinned public download from source candidates and open
   pull requests
 - separate local model inference from setup, downloads, updates, and optional
