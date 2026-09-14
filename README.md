@@ -1,6 +1,6 @@
 # AFK LocalAI for Windows
 
-> Public Friend Beta `0.1.7rc1` · current source candidate `0.2.0-rc1`
+> Public Beta `0.1.7rc1` · current source candidate `0.2.0-rc1`
 
 AFK AI is a local-first AI workspace for Windows 11. It combines Ollama, Open
 WebUI, SearXNG, local voice, hardware-aware model selection, and a guided Windows
@@ -12,10 +12,10 @@ setup path.
 
 ## Release authority
 
-The public Friend Beta is pinned separately from development. The project
-website remains the download authority for `0.1.7rc1`; branches, pull requests,
-and the `0.2.0-rc1` source candidate can contain work that is not included in
-the current download.
+The public Beta is pinned separately from development. The project website
+remains the download authority for `0.1.7rc1`; branches, pull requests, and the
+`0.2.0-rc1` source candidate can contain work that is not included in the current
+download.
 
 The `0.2.0-rc1` source candidate defines a conventional Windows installer named
 `AFKLocalAISetup-0.2.0-rc1-x64.exe`. It is not a published candidate until exact
@@ -28,7 +28,7 @@ prerelease with their SHA-256 file. See the
 
 | | |
 |---|---|
-| Public status | Friend Beta `0.1.7rc1` |
+| Public status | Beta `0.1.7rc1` |
 | Source candidate | `0.2.0-rc1` (not yet the public download) |
 | Primary target | Windows 11 with an NVIDIA GPU |
 | CPU-only path | Smaller models with slower generation |
@@ -37,17 +37,17 @@ prerelease with their SHA-256 file. See the
 | Optional search | SearXNG at `http://localhost:8080` |
 | Licence | MIT |
 
-## Install the public Friend Beta
+## Install the public Beta
 
 Download AFK AI from the
 [project website](https://localai-windows-starter-site.allusionsafk.workers.dev/).
-The website serves pinned Friend Beta bytes after verifying their SHA-256. It
-does not use GitHub `releases/latest` as the AFK AI version authority.
+The website serves pinned Beta bytes after verifying their SHA-256. It does not
+use GitHub `releases/latest` as the AFK AI version authority.
 
 The source file remains named `Install Local AI.cmd` for compatibility. The
 website serves the same pinned bytes as `Install AFK AI.cmd`. Run the downloaded
-installer and follow the prompts. Windows may warn about the unsigned Friend
-Beta script; the file can be inspected before it is run.
+installer and follow the prompts. Windows may warn about the unsigned Beta
+script; the file can be inspected before it is run.
 
 If Smart App Control blocks the script, do not disable Smart App Control for the
 beta. Use the inspectable source/bootstrap route instead.
@@ -111,7 +111,7 @@ See [SECURITY.md](SECURITY.md) for reporting and security details.
 
 ## Requirements
 
-Current Friend Beta target:
+Current Beta target:
 
 - Windows 11
 - hardware virtualization for the Docker path
@@ -193,14 +193,14 @@ models, prune Docker, delete volumes, or remove preserved user state.
 | [Support](SUPPORT.md) | Support scope and issue routing |
 | [Security](SECURITY.md) | Private vulnerability reporting |
 | [Contributing](CONTRIBUTING.md) | Contribution and test expectations |
-| [Friend Beta 0.1.7 notes](docs/releases/0.1.7rc1.md) | Current public candidate |
+| [Beta 0.1.7 notes](docs/releases/0.1.7rc1.md) | Current public candidate |
 | [0.2.0 source candidate notes](docs/releases/0.2.0-rc1.md) | Unpublished source-candidate scope |
 | [Installer guide](installer/README.md) | Native distribution architecture |
 | [WebBrain guide](docs/webbrain.md) | Browser and search integration |
 
-Historical Adaptive Media release artefacts also exist in this repository.
-They are not AFK AI versions. For public AFK AI downloads, use the website pin
-and the named Friend Beta release record.
+Historical DemiMedia/Adaptive Media release artefacts also exist in this
+repository. They are not AFK AI versions. For public AFK AI downloads, use the
+website pin and the named Beta release record.
 
 ## Licence
 
