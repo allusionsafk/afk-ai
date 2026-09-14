@@ -285,7 +285,7 @@ if bad:
 print("think-light only")
 '''
     result = run_command(
-        ["docker", "exec", "localai-open-webui-1", "python", "-c", code],
+        ["docker", "exec", "afk-localai-open-webui-1", "python", "-c", code],
         cwd=REPO_ROOT,
         timeout_sec=20,
     )

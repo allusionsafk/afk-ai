@@ -172,7 +172,7 @@ if bad:
     sys.exit(1)
 print("think-light only")
 '@
-  $result = Invoke-ProcessCaptured 'docker' @('exec', 'localai-open-webui-1', 'python', '-c', $code) 20
+  $result = Invoke-ProcessCaptured 'docker' @('exec', 'afk-localai-open-webui-1', 'python', '-c', $code) 20
   if ($result.Code -eq 0) {
     Line 'OK' 'Open WebUI thinking' 'think=false only on Qwen3.6 think-light rows'
   } else {

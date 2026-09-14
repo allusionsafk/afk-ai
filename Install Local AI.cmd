@@ -26,21 +26,23 @@ set "BOOT=%TEMP%\localai-bootstrap.ps1"
 echo   Starting the installer...
 echo.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%BOOT%" %*
-rem Exit 10 = the planned Docker Desktop checkpoint, not a failure.
+rem Exit 10 = a planned pause that needs something from you, not a failure.
+rem This code is a fixed contract: installers already downloaded from the website
+rem route 10 here and treat anything higher as an unexpected error.
 if errorlevel 11 goto :failed
-if errorlevel 10 goto :dockerwait
+if errorlevel 10 goto :actionneeded
 if errorlevel 1 goto :failed
 echo.
 echo   Finished. Your chat is at http://127.0.0.1:3000 (see the summary above).
 goto :done
 
-:dockerwait
+:actionneeded
 echo.
-echo   Almost there - one more double-click:
-echo   1. Open Docker Desktop (just installed; find it in the Start menu).
-echo   2. Accept its terms and let it finish setting up.
-echo      If it asks to restart Windows, restart.
-echo   3. Double-click this file again. It continues where it left off.
+echo   Almost there - AFK AI stopped on purpose and needs one thing from you.
+echo   Read the steps above this line and do them (they may include restarting
+echo   Windows), then double-click this file again.
+echo   AFK AI re-checks your PC and continues where it left off - nothing you
+echo   have already set up is lost.
 goto :done
 
 :failed

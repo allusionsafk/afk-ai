@@ -10,7 +10,7 @@
 #>
 [CmdletBinding()]
 param(
-  [string]$Container = 'localai-open-webui-1',
+  [string]$Container = 'afk-localai-open-webui-1',
   [switch]$Restart
 )
 

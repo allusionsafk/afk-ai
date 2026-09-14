@@ -33,7 +33,11 @@ BUSYBOX_IMAGE = (
     "sha256:9532d8c39891ca2ecde4d30d7710e01fb739c87a8b9299685c63704296b16028"
 )
 OPEN_WEBUI_IMAGE = "ghcr.io/open-webui/open-webui:main"
-OPEN_WEBUI_VOLUME = "localai_open-webui"
+# Fallback only - resolve_volume() asks Docker for the real mount first. It must
+# name THIS project's volume: "localai_open-webui" belongs to the compose project
+# "localai", which a private engineering workbench on a developer machine also
+# claims, so the old value could back up (and restore over) someone else's data.
+OPEN_WEBUI_VOLUME = "afk-localai_open-webui"
 OPEN_WEBUI_DATA_MOUNT = "/app/backend/data"
 
 

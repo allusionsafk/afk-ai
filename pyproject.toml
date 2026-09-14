@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "localai"
-version = "0.1.1"
-description = "Python orchestration layer for a private local AI workspace."
+version = "0.2.0rc1"
+description = "Python orchestration layer for the public AFK LocalAI Windows distribution."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -17,7 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "mypy>=1.11",
+  "mypy>=1.11,<2",
   "pytest>=8.2",
   "ruff>=0.6",
 ]

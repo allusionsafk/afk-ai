@@ -22,7 +22,10 @@ param(
   [string]$Intent = '',
   [switch]$AcceptDefaults,
   [switch]$Resume,
-  [switch]$DryRun
+  [switch]$DryRun,
+  [string]$DataRoot = (Join-Path $env:LOCALAPPDATA 'AFK LocalAI\State'),
+  [switch]$EventStream,
+  [string]$LegacyInstallRoot = (Join-Path $env:USERPROFILE 'localai')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -31,12 +34,17 @@ if ($DryRun) { $WhatIfPreference = $true }
 $RepoRoot = (Resolve-Path -LiteralPath (Split-Path -Parent $PSScriptRoot)).Path
 . (Join-Path $RepoRoot 'ai-common.ps1')
 . (Join-Path $PSScriptRoot 'installer-common.ps1')
+. (Join-Path $PSScriptRoot 'preflight.ps1')
+Set-InstallerEventStream -Enabled ([bool]$EventStream)
 
-$StatePath = Get-InstallerStatePath -Root $PSScriptRoot
+$DataRoot = [System.IO.Path]::GetFullPath($DataRoot)
+$LegacyInstallRoot = [System.IO.Path]::GetFullPath($LegacyInstallRoot)
+$StatePath = Get-InstallerStatePath -Root $DataRoot
 $TiersPath = Join-Path $PSScriptRoot 'tiers.json'
 $Tiers = Get-Content -LiteralPath $TiersPath -Raw | ConvertFrom-Json
 $State = Import-InstallerState -Path $StatePath
-if (-not $Resume) { $State.pending_reboot = $false }
+$State.legacy_install = [pscustomobject]@{ detected = [bool](Test-Path -LiteralPath $LegacyInstallRoot -PathType Container) }
+if (-not $Resume) { $State.pending_reboot = [pscustomobject]@{ required = $false; reason = $null } }
 
 # Canonical intent ids (audit finding 14: one id, display labels map to it).
 $IntentLabels = [ordered]@{
@@ -106,6 +114,134 @@ function Invoke-Localai {
   if (-not $py) { throw 'Python not found; run the Prerequisites phase first.' }
   $full = (Get-PyRest -Py $py) + @('-m', 'localai') + $Arguments
   return (Invoke-AiProcess -FilePath $py[0] -ArgumentList $full -TimeoutSec $TimeoutSec -WorkingDirectory $RepoRoot)
+}
+
+# ------------------------------------------------- environment preflight/gate
+
+function Stop-ForUserAction {
+  <#
+    The planned "action required" pause.
+
+    Exit 10 is a CONTRACT, not an implementation detail: copies of
+    "Install Local AI.cmd" already downloaded from the website route errorlevel
+    10 to their friendly pause and treat anything >=11 as "Something went wrong".
+    Every planned pause therefore exits 10 and puts the specific instruction on
+    screen above it.
+  #>
+  param(
+    [Parameter(Mandatory)][string[]]$Lines,
+    [Parameter(Mandatory)][string]$Title,
+    $Checkpoint,
+    [string]$RebootReason
+  )
+  Write-Card $Title $Lines
+  Write-InstallerEvent -EventType 'checkpoint' -Phase 'environment-preflight' `
+    -Status 'action-required' -Code 'checkpoint' -Message ($Lines -join ' ')
+  if ($Checkpoint) { $State.preflight = $Checkpoint }
+  if ($RebootReason) {
+    $State.pending_reboot = [pscustomobject]@{ required = $true; reason = $RebootReason }
+  }
+  try {
+    Save-InstallerState -State $State -Path $StatePath
+  } catch {
+    # A checkpoint we cannot persist must not turn a clear, actionable pause
+    # into an unexplained crash - the next run re-probes the machine anyway.
+    Write-Host "   (Could not save setup state: $($_.Exception.Message))" -ForegroundColor DarkGray
+  }
+  exit 10
+}
+
+function Invoke-EnvironmentProbe {
+  # One live, read-only sweep. Never trusts the persisted checkpoint.
+  return (Invoke-EnvironmentPreflight -Evidence (Get-PreflightEvidence))
+}
+
+function Assert-EnvironmentReady {
+  <#
+    The live gate. Called before the Python/model work and again immediately
+    before the model pull, so a Docker Desktop that stopped mid-install cannot
+    be papered over by a phase that was marked done twenty minutes ago.
+  #>
+  param([string]$Title = 'Environment check')
+  if ($DryRun) {
+    Write-Host '   [dry-run] would re-check Windows virtualization / Docker readiness' -ForegroundColor DarkGray
+    return
+  }
+  $result = Invoke-EnvironmentProbe
+  if (Test-EnvironmentReady -Result $result) {
+    Write-Host "   Environment still ready ($($result.Docker.EndpointKind) Docker engine)." -ForegroundColor DarkGray
+    return
+  }
+  Stop-ForUserAction -Title $Title -Lines (Get-PreflightUserMessage -Result $result) `
+    -Checkpoint (Get-PreflightCheckpoint -Result $result) `
+    -RebootReason $(if ($result.RebootRequired) { 'windows-virtualization-recovery' } else { '' })
+}
+
+function Invoke-PhaseEnvironmentPreflight {
+  <#
+    Phase 0. Classify the LOCAL Windows virtualization / WSL / Docker environment
+    before anything expensive happens.
+
+    The one bounded mutation this phase may perform is the Docker Desktop install
+    that already existed later in the flow - and only when Docker's absence is
+    the sole blocker. Firmware, Windows features, boot configuration and WSL are
+    never changed here; those stay instruction-only.
+  #>
+  [CmdletBinding(SupportsShouldProcess)]
+  param()
+  Write-Card 'Phase 0 - Checking this PC' @(
+    'Looking at Windows virtualization, WSL and Docker before downloading anything.')
+  if ($DryRun) {
+    Write-Host '   [dry-run] would probe Windows virtualization / WSL / Docker (read-only)' -ForegroundColor DarkGray
+    return
+  }
+
+  $result = Invoke-EnvironmentProbe
+  Write-Host "   $((Get-PreflightDiagnosticSummary -Result $result) -join '  ')" -ForegroundColor DarkGray
+
+  if (Test-EnvironmentReady -Result $result) {
+    $State.preflight = Get-PreflightCheckpoint -Result $result
+    Write-Card 'Phase 0 - Ready' @('Windows virtualization and the local Docker engine look healthy.')
+    return
+  }
+
+  # Bounded recovery: Docker Desktop simply not being installed is the one
+  # blocker AFK AI can act on, and only when nothing underneath it is broken.
+  $onlyDockerMissing = (
+    $result.Code -eq 'PREFLIGHT-DOCKER-NOT-INSTALLED' -and
+    $result.Firmware.Status -eq 'READY' -and
+    $result.WindowsVirtualization.Status -eq 'READY'
+  )
+  if ($onlyDockerMissing -and $PSCmdlet.ShouldProcess('Docker Desktop', 'winget install')) {
+    Write-Card 'Phase 0 - Docker Desktop' @(
+      'Docker Desktop is missing but this PC can run it. Installing it now...',
+      'FIRST LAUNCH needs you to accept its license and finish setup, and may reboot.')
+    [void](Install-WithWinget -Id 'Docker.DockerDesktop' -TimeoutSec 1200)
+    # Re-probe live rather than assuming the install worked.
+    $result = Invoke-EnvironmentProbe
+    if (Test-EnvironmentReady -Result $result) {
+      $State.preflight = Get-PreflightCheckpoint -Result $result
+      Write-Card 'Phase 0 - Ready' @('Docker Desktop is installed and its local engine is healthy.')
+      return
+    }
+    Stop-ForUserAction -Title 'Almost there' -Lines @(
+      'Docker Desktop is installed but has not finished its own first-run setup.',
+      'Next: open Docker Desktop from the Start menu, accept its terms and let it finish.',
+      'If it asks to restart Windows, restart. Then run the AFK AI installer again.',
+      'Your answers and setup progress are saved.'
+    ) -Checkpoint (Get-PreflightCheckpoint -Result $result) -RebootReason 'docker-desktop-first-run'
+  }
+
+  Stop-ForUserAction -Title 'AFK AI needs one thing first' `
+    -Lines (Get-PreflightUserMessage -Result $result) `
+    -Checkpoint (Get-PreflightCheckpoint -Result $result) `
+    -RebootReason $(if ($result.RebootRequired) { 'windows-virtualization-recovery' } else { '' })
+}
+
+function Invoke-PhaseEnvironmentReady {
+  Write-Card 'Phase 0b - Environment gate' @(
+    'Confirming the local Docker engine is still healthy before any setup work.')
+  Assert-EnvironmentReady -Title 'AFK AI needs one thing first'
 }
 
 # ---------------------------------------------------------------- phases
@@ -256,22 +392,13 @@ function Invoke-PhaseOllamaDocker {
     Add-OllamaUserOrigin -Origin $script:WebBrainOrigin
   }
 
-  $docker = Get-Command 'docker.exe' -ErrorAction SilentlyContinue
-  if (-not $docker) {
-    Write-Card 'Phase 5a - Docker Desktop' @(
-      'Docker Desktop not found. Installing via winget...',
-      'FIRST LAUNCH needs you to accept its license + WSL2 setup, and may reboot.')
-    [void](Install-WithWinget -Id 'Docker.DockerDesktop' -TimeoutSec 1200)
-    $State.pending_reboot = $true
-    Save-InstallerState -State $State -Path $StatePath
-    Write-Host ''
-    Write-Host 'ACTION NEEDED: open Docker Desktop once (Start menu), accept its terms, and' -ForegroundColor Yellow
-    Write-Host 'let it finish setting up. If it asks to restart Windows, restart.' -ForegroundColor Yellow
-    Write-Host 'Then double-click "Install Local AI.cmd" again - it continues where it left off.' -ForegroundColor Yellow
-    Write-Host '(Terminal users: pwsh -ExecutionPolicy Bypass -File installer/Install-LocalAI.ps1 -Resume)' -ForegroundColor DarkGray
-    return $false   # signal the runner to stop cleanly at the resume point
+  # Docker readiness is now proved by the Phase 0 preflight and re-proved by the
+  # environment gate, both of which run before this phase. Reaching here with no
+  # docker.exe means the machine changed underneath us mid-run, so hand it back
+  # to the same live gate rather than starting a second install path.
+  if (-not (Get-Command 'docker.exe' -ErrorAction SilentlyContinue)) {
+    Assert-EnvironmentReady -Title 'AFK AI needs one thing first'
   }
-  return $true
 }
 
 function Invoke-PhasePulls {
@@ -279,6 +406,10 @@ function Invoke-PhasePulls {
   param()
   Write-Card 'Phase 5b - Pull models + aliases' @(
     'ollama pull picks; build Modelfiles; localai model-aliases (needs Ollama running)')
+  # Last live check before the expensive download. The Friend Beta failure this
+  # unit exists to prevent was a multi-GB pull on a machine whose Docker engine
+  # could never start; a phase marked done earlier is not evidence of that.
+  Assert-EnvironmentReady -Title 'AFK AI needs one thing first'
   if ($PSCmdlet.ShouldProcess('models', 'ollama pull + create + aliases')) {
     $ollama = Get-Command 'ollama.exe' -ErrorAction SilentlyContinue
     if (-not $ollama) { throw 'ollama is not on PATH yet; close this window and run "Install Local AI.cmd" again.' }
@@ -416,10 +547,17 @@ function Invoke-PhaseSelfTest {
 
 # ------------------------------------------------------- phase runner
 
-# (name, function, is-a-checkpoint-that-may-stop) in the corrected order
-# (audit finding 6): vet -> intent -> python -> pip -> scout -> ollama/docker
-# (reboot) -> pulls -> compose -> seed -> secure -> self-test.
+# Phase order. The two environment phases come first and are never skipped on
+# resume (Test-PhaseDone refuses to report them done), because the invariant this
+# flow exists to hold is:
+#
+#   no model pull and no product-specific Python/model setup begins until a LIVE
+#   gate has proved a usable local Docker path.
+#
+# See docs/design/virtualization-docker-preflight.md.
 $Phases = @(
+  @{ Name = 'environment-preflight'; Run = { Invoke-PhaseEnvironmentPreflight } }
+  @{ Name = 'environment-ready'; Run = { Invoke-PhaseEnvironmentReady } }
   @{ Name = 'vet';      Run = { Invoke-PhaseVet } }
   @{ Name = 'intent';   Run = { Invoke-PhaseIntent } }
   @{ Name = 'python';   Run = { Invoke-PhasePython } }
@@ -463,14 +601,21 @@ foreach ($phase in $Phases) {
     Write-Host "-- skip $($phase.Name) (already done)" -ForegroundColor DarkGray
     continue
   }
-  $result = & $phase.Run
-  if ($phase.Name -eq 'ollama-docker' -and $result -eq $false) {
-    # Docker Desktop was just installed; stop at the reboot checkpoint.
-    # Exit 10 is the contract with "Install Local AI.cmd": a planned pause,
-    # not a failure - the .cmd prints "double-click me again", not an error.
-    exit 10
+  # A planned pause exits from inside the phase via Stop-ForUserAction; anything
+  # that returns here completed, so record it. Safety-critical phases are never
+  # recorded (Set-PhaseDone drops them) and so always re-run.
+  Write-InstallerEvent -EventType 'phase-start' -Phase $phase.Name -Status 'running' `
+    -Code 'phase-start' -Message "Starting $($phase.Name)."
+  try {
+    & $phase.Run | Out-Null
+    Set-PhaseDone -State $State -Phase $phase.Name -Path $StatePath
+    Write-InstallerEvent -EventType 'phase-success' -Phase $phase.Name -Status 'success' `
+      -Code 'phase-success' -Message "Completed $($phase.Name)."
+  } catch {
+    Write-InstallerEvent -EventType 'phase-failure' -Phase $phase.Name -Status 'failure' `
+      -Code 'phase-failure' -Message $_.Exception.Message
+    throw
   }
-  Set-PhaseDone -State $State -Phase $phase.Name -Path $StatePath
 }
 
 Save-InstallerState -State $State -Path $StatePath

@@ -1,8 +1,11 @@
-# AFK AI support
+# AFK LocalAI support
 
-AFK AI is currently Friend Beta `0.1.7rc1`.
+The current public AFK AI Friend Beta is `0.1.7rc1`. The repository also
+contains an unpublished `0.2.0-rc1` source candidate; always report the exact
+version, tag, branch, or commit you tested.
 
-Support is focused on reproducible Windows installation, runtime, chat, model, and hardware problems.
+Support is focused on reproducible Windows installation, runtime, chat, model,
+and hardware problems.
 
 [Download AFK AI](https://localai-windows-starter-site.allusionsafk.workers.dev/)
 
@@ -17,11 +20,20 @@ Support is focused on reproducible Windows installation, runtime, chat, model, a
 | Model runtime | Ollama for Windows |
 | Recommended free disk | About 40 GB for a comfortable first install |
 
-The public Friend Beta is pinned separately from development branches and pull requests.
+The public Friend Beta is pinned separately from development branches and pull
+requests.
 
 ## Installation or setup
 
 Use the **Installation / setup problem** issue form.
+
+Before reporting a `0.2.0-rc1` source-candidate setup problem, launch AFK LocalAI
+again. A partial setup should return to its saved checkpoint and recheck the live
+machine. If Windows requested a restart, restart before choosing **Try again**.
+
+The source candidate provides **Start Menu → AFK LocalAI → Diagnostics**. Review
+the generated report before attaching it; it should contain only the bounded
+environment evidence needed for support.
 
 Include:
 
@@ -34,7 +46,8 @@ Include:
 - GPU model when relevant
 - a sanitised diagnostic report when available
 
-Do not post credentials, `.env` contents, private documents, chats, prompts, cookies, tokens, or unrelated machine information.
+Do not post credentials, `.env` contents, private documents, chats, prompts,
+cookies, tokens, or unrelated machine information.
 
 ## Hardware or compatibility
 
@@ -55,18 +68,18 @@ Use the **General bug** form for a reproducible problem after setup, including:
 
 - chat or Open WebUI
 - start and stop behaviour
-- service health
-- model selection
+- service health or structured readiness
+- model selection or inference
 - Control Center behaviour
 - search or local voice
 - behaviour that disagrees with the documentation
 
 ## Security and privacy
 
-Do not publish sensitive security details in a normal issue.
-
-Use the private reporting path in [SECURITY.md](SECURITY.md).
+Do not publish sensitive security details in a normal issue. Use the private
+reporting path in [SECURITY.md](SECURITY.md).
 
 ## Writing a useful report
 
-Keep the report focused on one reproducible problem. Include the evidence needed to reproduce it and remove unrelated machine details before posting.
+Keep the report focused on one reproducible problem. Include the evidence needed
+to reproduce it and remove unrelated machine details before posting.
