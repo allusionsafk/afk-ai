@@ -1,8 +1,8 @@
 # AFK LocalAI security policy
 
-AFK AI is Friend Beta software. Please report security or privacy problems that
-could affect the installer, local service boundary, diagnostics, updates,
-download integrity, or user data.
+AFK AI is Beta software. Please report security or privacy problems that could
+affect the installer, local service boundary, diagnostics, updates, download
+integrity, or user data.
 
 ## Report privately
 
@@ -47,7 +47,7 @@ documents.
 
 ## Version scope
 
-The current public Friend Beta is `v0.1.7rc1`. The repository also contains an
+The current public Beta is `v0.1.7rc1`. The repository also contains an
 unpublished `v0.2.0-rc1` source candidate. Development on `master` can move ahead
 of either record, so every report should identify the exact tag or commit tested.
 
