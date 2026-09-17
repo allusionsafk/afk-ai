@@ -68,8 +68,10 @@ failure, **Resume setup** rechecks live state before continuing.
 The candidate installs per user under `%LOCALAPPDATA%\Programs\AFK LocalAI` and
 keeps mutable state under `%LOCALAPPDATA%\AFK LocalAI`, outside the replaceable
 program directory. The supported user path does not require a repository clone,
-developer tools, manual PowerShell, or PATH editing. App-owned Python remains a
-required Product Utility milestone and is not yet complete.
+developer tools, manual PowerShell, or PATH editing. The source candidate carries
+its own pinned, verified CPython runtime and never installs Python or packages
+into Python already on the PC. Home reports what AFK AI can prove right now, and
+Open Chat checks that chat really answers before opening it.
 
 ## Local services
 
@@ -119,11 +121,11 @@ Current Beta target:
 - about 40 GB of free disk for a comfortable first install
 - Docker Desktop
 - Ollama for Windows
-- PowerShell 7 for the full tooling path
+- PowerShell 7 only for the engineering tooling and optional firewall hardening
 
 The source tree contains Python-based engineering and control tools. The
-finished product must use an AFK-owned Python runtime so users do not need to
-install Python, select a version, modify PATH, or manage dependencies.
+installed product uses its own Python runtime, so users do not need to install
+Python, select a version, modify PATH, or manage dependencies.
 
 ## Model fitting
 
