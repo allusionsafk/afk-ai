@@ -108,6 +108,71 @@ foreach ($case in $cases.GetEnumerator()) {
 $noAdapters = Get-Problems (New-Rule) @()
 Assert-True 'no physical adapters to check against is not verified' ($noAdapters.Count -gt 0)
 
+# ------------------------------------------- self-elevation command quoting
+# Delta review of PR #24 reproduced: ai-firewall.ps1 put the script and log paths
+# inside single-quoted literals of the elevated -Command unescaped, so a path with
+# an apostrophe (a profile folder named O'Brien) broke the command, the rule was never applied,
+# and setup - which requires a verified rule - could never finish. The child is
+# launched here exactly as Invoke-SelfElevatedApply launches it, minus -Verb RunAs,
+# and runs a harmless stub in place of the firewall tool.
+Write-Host '-- self-elevation quoting (paths with apostrophes)' -ForegroundColor Cyan
+$firewallAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $Root 'ai-firewall.ps1'), [ref]$null, [ref]$null)
+$argumentsAst = $firewallAst.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-SelfElevatedApplyArguments' }, $true)
+$elevateAst = $firewallAst.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-SelfElevatedApply' }, $true)
+Assert-True 'the elevated command is built by Get-SelfElevatedApplyArguments' $argumentsAst
+Assert-True 'elevation launches exactly those arguments' (
+  $elevateAst -and
+  $elevateAst.Extent.Text -match '\$cmdArgs = Get-SelfElevatedApplyArguments -ScriptPath \$PSCommandPath -LogPath \$logPath' -and
+  $elevateAst.Extent.Text -match 'Start-Process -FilePath \$hostExe -Verb RunAs -ArgumentList \$cmdArgs')
+if ($argumentsAst) {
+  . ([scriptblock]::Create($argumentsAst.Extent.Text))
+  $rsquo = [string][char]0x2019
+  $eUmlaut = [string][char]0x00EB
+  $pathCases = [ordered]@{
+    'an ordinary path'          = 'Ordinary'
+    'an ASCII apostrophe'       = "O'Brien"
+    'a typographic apostrophe'  = "O${rsquo}Brien"
+    'spaces and an apostrophe'  = "Mary O'Brien Smith\AFK LocalAI"
+    'non-ASCII and apostrophes' = "Zo${eUmlaut} O'Brien-O${rsquo}Neil"
+  }
+  # Elevation prefers pwsh.exe when present and falls back to powershell.exe;
+  # the child parses the command, so prove both hosts that can be chosen.
+  $childHosts = @((Get-Process -Id $PID).Path)
+  $pwshHost = Get-Command 'pwsh.exe' -ErrorAction SilentlyContinue
+  if ($pwshHost) { $childHosts += $pwshHost.Source }
+  $probeRoot = Join-Path ([IO.Path]::GetTempPath()) ('afk-elevation-' + [guid]::NewGuid().ToString('n'))
+  $previousProbe = $env:AFK_ELEVATION_PROBE
+  try {
+    foreach ($childHost in $childHosts) {
+      $hostName = [IO.Path]::GetFileName($childHost)
+      foreach ($case in $pathCases.GetEnumerator()) {
+        $caseRoot = Join-Path (Join-Path $probeRoot ([guid]::NewGuid().ToString('n'))) $case.Value
+        $scriptPath = Join-Path $caseRoot 'ai-firewall.ps1'
+        $logPath = Join-Path (Join-Path $caseRoot 'logs') 'firewall-apply.log'
+        $record = Join-Path $probeRoot ([guid]::NewGuid().ToString('n') + '.txt')
+        [void](New-Item -ItemType Directory -Path (Split-Path -Parent $logPath) -Force)
+        [IO.File]::WriteAllText($scriptPath, (@(
+          'param([switch]$Apply, [switch]$NoSelfElevate)',
+          '[IO.File]::WriteAllText($env:AFK_ELEVATION_PROBE, ("{0}|{1}|{2}" -f $PSCommandPath, $Apply, $NoSelfElevate), [Text.Encoding]::UTF8)',
+          "Write-Output 'elevated-child-reached'",
+          'exit 0') -join "`r`n"), [Text.Encoding]::ASCII)
+        $env:AFK_ELEVATION_PROBE = $record
+        $child = Start-Process -FilePath $childHost -ArgumentList (Get-SelfElevatedApplyArguments -ScriptPath $scriptPath -LogPath $logPath) `
+          -Wait -PassThru -WindowStyle Hidden
+        $label = "$hostName, $($case.Key)"
+        Assert-True "elevated child is reached ($label)" ($child.ExitCode -eq 0 -and (Test-Path -LiteralPath $record)) "exit $($child.ExitCode)"
+        $seen = if (Test-Path -LiteralPath $record) { [IO.File]::ReadAllText($record, [Text.Encoding]::UTF8) } else { '' }
+        Assert-True "script path arrives intact with -Apply -NoSelfElevate ($label)" ($seen -ceq "$scriptPath|True|True") "saw '$seen'"
+        $logged = if (Test-Path -LiteralPath $logPath) { Get-Content -LiteralPath $logPath -Raw } else { '' }
+        Assert-True "log path arrives intact ($label)" ("$logged" -match 'elevated-child-reached') "log at expected path: $(Test-Path -LiteralPath $logPath)"
+      }
+    }
+  } finally {
+    $env:AFK_ELEVATION_PROBE = $previousProbe
+    if (Test-Path -LiteralPath $probeRoot) { Remove-Item -LiteralPath $probeRoot -Recurse -Force -ErrorAction SilentlyContinue }
+  }
+}
+
 # ------------------------------------------------------------ the secure phase
 Write-Host '-- secure phase (extracted from Install-LocalAI.ps1)' -ForegroundColor Cyan
 $installer = Join-Path $Root 'installer/Install-LocalAI.ps1'
