@@ -13,6 +13,10 @@ public sealed class ProvisioningEvent
     [JsonPropertyName("status")] public string Status { get; init; } = "";
     [JsonPropertyName("code")] public string Code { get; init; } = "";
     [JsonPropertyName("message")] public string Message { get; init; } = "";
+    [JsonPropertyName("data")] public ProvisioningEventData? Data { get; init; }
+
+    /// <summary>Download progress 0-100 when the event carries a valid one.</summary>
+    public int? Percent => Data?.Percent is >= 0 and <= 100 ? Data.Percent : null;
 
     public static bool TryParse(string line, out ProvisioningEvent? provisioningEvent)
     {
@@ -60,11 +64,30 @@ public sealed record RecoveryAction(
     };
 }
 
+public sealed class ProvisioningEventData
+{
+    [JsonPropertyName("percent")] public int? Percent { get; init; }
+    [JsonPropertyName("completed")] public long? Completed { get; init; }
+    [JsonPropertyName("total")] public long? Total { get; init; }
+}
+
+/// <summary>The shell's own resume record. It is NOT evidence that chat works.</summary>
+/// <remarks>
+/// Schema 2 stored <c>usable</c>, set when setup exited 0, and Home rendered
+/// "Your local AI is ready" from it indefinitely - including on a PC whose Docker,
+/// Ollama and chat were all stopped. Schema 3 records only that setup completed,
+/// which decides whether to show Setup or Home; what Home says comes from the
+/// engine's live status.
+/// </remarks>
 public sealed class ProvisioningState
 {
-    public const int CurrentSchemaVersion = 2;
-    [JsonPropertyName("schema_version")] public int SchemaVersion { get; init; } = CurrentSchemaVersion;
-    [JsonPropertyName("usable")] public bool Usable { get; set; }
+    public const int CurrentSchemaVersion = 3;
+    [JsonPropertyName("schema_version")] public int SchemaVersion { get; set; } = CurrentSchemaVersion;
+    [JsonPropertyName("setup_completed")] public bool SetupCompleted { get; set; }
+    /// <summary>Schema 2 input only; migrated into <see cref="SetupCompleted"/> and never written.</summary>
+    [JsonPropertyName("usable")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool LegacyUsable { get; set; }
     [JsonPropertyName("last_reason_code")] public string? LastReasonCode { get; set; }
     [JsonPropertyName("last_phase")] public string? LastPhase { get; set; }
     [JsonPropertyName("updated_at_utc")] public DateTimeOffset UpdatedAtUtc { get; set; } = DateTimeOffset.UtcNow;

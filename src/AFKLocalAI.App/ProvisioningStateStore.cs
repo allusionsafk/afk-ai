@@ -21,6 +21,13 @@ public sealed class ProvisioningStateStore
             if (state.SchemaVersion > ProvisioningState.CurrentSchemaVersion)
                 throw new InvalidDataException($"State schema {state.SchemaVersion} was written by a newer AFK LocalAI.");
             if (state.SchemaVersion <= 0) throw new JsonException("State schema is invalid.");
+            if (state.SchemaVersion < ProvisioningState.CurrentSchemaVersion)
+            {
+                // Schema 2 "usable" only ever meant "setup exited 0".
+                state.SetupCompleted = state.SetupCompleted || state.LegacyUsable;
+                state.LegacyUsable = false;
+                state.SchemaVersion = ProvisioningState.CurrentSchemaVersion;
+            }
             return state;
         }
         catch (JsonException)

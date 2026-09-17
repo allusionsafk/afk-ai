@@ -8,7 +8,8 @@ public enum AppMode { Setup, Home }
 
 public static class AppModeResolver
 {
-    public static AppMode Resolve(ProvisioningState state) => state.Usable ? AppMode.Home : AppMode.Setup;
+    /// <summary>Which screen opens. Never what it says: Home asks the engine.</summary>
+    public static AppMode Resolve(ProvisioningState state) => state.SetupCompleted ? AppMode.Home : AppMode.Setup;
 }
 
 public static class AppIdentity
@@ -59,6 +60,34 @@ public sealed record CommandLineOptions(
     }
 }
 
+/// <summary>
+/// The uninstaller's stop. Stops only what ownership is proven for, and never
+/// fails the uninstall: a missing or damaged runtime means nothing provable can
+/// be stopped, which is reported and treated as done.
+/// </summary>
+public static class UninstallStop
+{
+    public static int Run(AppPaths paths)
+    {
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+            new HiddenProcessRunner().RunAsync(new ProvisioningController(paths).Stop(), null, timeout.Token)
+                .GetAwaiter().GetResult();
+        }
+        catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or OperationCanceledException or InvalidOperationException or IOException)
+        {
+            try
+            {
+                using var error = new StreamWriter(Console.OpenStandardError());
+                error.WriteLine($"AFK AI stop skipped ({exception.GetType().Name}). Docker Desktop, Ollama and models were left untouched.");
+            }
+            catch (IOException) { }
+        }
+        return 0;
+    }
+}
+
 public sealed record SelfTestSummary(
     string Product,
     string Version,
@@ -75,14 +104,21 @@ public static class SelfTestRunner
 {
     public static SelfTestSummary Run(AppPaths paths, ProductInfo product)
     {
+        var controller = new ProvisioningController(paths);
         var checks = new SortedDictionary<string, bool>(StringComparer.Ordinal)
         {
             ["architecture_x64"] = Environment.Is64BitProcess,
             ["metadata_valid"] = product.ProductName == "AFK LocalAI" && product.ExecutableName == "AFKLocalAI.exe",
             ["data_outside_program"] = !paths.DataRoot.StartsWith(paths.ProgramRoot, StringComparison.OrdinalIgnoreCase),
             ["preflight_present"] = File.Exists(Path.Combine(paths.ProgramRoot, "installer", "Get-Preflight.ps1")),
-            ["recovery_present"] = File.Exists(Path.Combine(paths.ProgramRoot, "installer", "Invoke-Recovery.ps1"))
+            ["recovery_present"] = File.Exists(Path.Combine(paths.ProgramRoot, "installer", "Invoke-Recovery.ps1")),
+            ["owned_runtime_present"] = File.Exists(controller.RuntimeInterpreter),
+            ["engine_entry_present"] = File.Exists(controller.EngineEntryPoint)
         };
+        // An installed build carries its manifest; there, every executed file must
+        // match it. (A development tree has no manifest to check against.)
+        if (File.Exists(Path.Combine(paths.ProgramRoot, "payload-manifest.json")))
+            checks["installation_intact"] = InstallationIntegrity.Verify(paths.ProgramRoot).Intact;
         try
         {
             var store = new ProvisioningStateStore(paths);
@@ -92,8 +128,11 @@ public static class SelfTestRunner
         }
         catch { checks["state_roundtrip"] = false; }
 
-        var controller = new ProvisioningController(paths);
-        foreach (var spec in new[] { controller.Preflight(), controller.Recovery("PREFLIGHT-READY", "retry"), controller.Provision() })
+        foreach (var spec in new[]
+                 {
+                     controller.Preflight(), controller.Recovery("PREFLIGHT-READY", "retry"), controller.Provision(),
+                     controller.Status(liveness: true), controller.Start(), controller.Stop()
+                 })
         {
             var info = spec.CreateStartInfo();
             checks[$"{spec.Purpose}_hidden"] =
@@ -121,16 +160,19 @@ internal static class Program
                 WriteStandardOutput(summary.ToJson());
                 return summary.Success ? 0 : 1;
             }
-            if (options.Stop)
-            {
-                var result = new HiddenProcessRunner().RunAsync(new ProvisioningController(paths).Stop()).GetAwaiter().GetResult();
-                return result.ExitCode;
-            }
+            if (options.Stop) return UninstallStop.Run(paths);
             if (options.Diagnostics || options.DataFolder)
             {
                 paths.EnsureUserDirectories();
-                if (options.Diagnostics) CreateDiagnostics(paths, product);
-                OpenPath(options.Diagnostics ? paths.DiagnosticsRoot : paths.DataRoot);
+                if (options.Diagnostics)
+                {
+                    var report = DiagnosticsWriter.CreateAsync(paths, product, new ProvisioningController(paths),
+                        new HiddenProcessRunner(), InstallationIntegrity.Verify(paths.ProgramRoot), null,
+                        CancellationToken.None).GetAwaiter().GetResult();
+                    Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{report}\"") { UseShellExecute = true });
+                    return 0;
+                }
+                OpenPath(paths.DataRoot);
                 return 0;
             }
 
@@ -157,18 +199,6 @@ internal static class Program
 
     private static void OpenPath(string path) =>
         Process.Start(new ProcessStartInfo("explorer.exe", $"\"{path}\"") { UseShellExecute = true });
-
-    private static void CreateDiagnostics(AppPaths paths, ProductInfo product)
-    {
-        var controller = new ProvisioningController(paths);
-        var result = new HiddenProcessRunner().RunAsync(controller.Diagnostics()).GetAwaiter().GetResult();
-        var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var content = result.StandardOutput + Environment.NewLine + result.StandardError;
-        if (!string.IsNullOrWhiteSpace(profile))
-            content = content.Replace(profile, "%USERPROFILE%", StringComparison.OrdinalIgnoreCase);
-        var report = Path.Combine(paths.DiagnosticsRoot, $"AFKLocalAI-Diagnostics-{DateTime.UtcNow:yyyyMMddTHHmmssZ}.txt");
-        File.WriteAllText(report, $"AFK LocalAI {product.DisplayVersion}{Environment.NewLine}{content}");
-    }
 
     private static void WriteStandardOutput(string value)
     {
