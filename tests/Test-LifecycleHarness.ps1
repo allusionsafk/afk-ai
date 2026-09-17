@@ -37,6 +37,7 @@ try {
     executable_present = $true
     version_matches = $true
     self_test_passed = $true
+    owned_runtime_verified = $true
     uninstall_entry_present = $true
     start_menu_present = $true
     uninstaller_exit_zero = $true
@@ -50,6 +51,13 @@ try {
     $broken[$key] = $false
     Assert-Throws "$key failure is rejected" { Assert-LifecycleEvidence -Evidence $broken }
   }
+  $withExtra = [ordered]@{}
+  foreach ($pair in $good.GetEnumerator()) { $withExtra[$pair.Key] = $pair.Value }
+  $withExtra['stale_program_files_removed'] = $false
+  Assert-Throws 'any additional recorded failure is rejected' { Assert-LifecycleEvidence -Evidence $withExtra }
+  $withoutRuntime = [ordered]@{}
+  foreach ($pair in $good.GetEnumerator()) { if ($pair.Key -ne 'owned_runtime_verified') { $withoutRuntime[$pair.Key] = $pair.Value } }
+  Assert-Throws 'lifecycle evidence without owned-runtime proof is rejected' { Assert-LifecycleEvidence -Evidence $withoutRuntime }
 
   Assert-Throws 'workspace root is not a disposable cleanup target' {
     Assert-SafeDisposablePath -Path $Root -AllowedParent $Root
@@ -81,7 +89,7 @@ if (Test-Path -LiteralPath $lifecyclePath) {
 }
 if (Test-Path -LiteralPath $upgradePath) {
   $text = Get-ContractText -Path $upgradePath
-  foreach ($needle in @('0.1.99-test', '0.2.0-rc1', 'sentinel', 'TestAppId', 'DisplayVersion', 'state_preserved')) {
+  foreach ($needle in @('0.1.99-test', '0.2.0-rc1', 'sentinel', 'TestAppId', 'DisplayVersion', 'state_preserved', 'stale_program_files_removed', 'Test-OwnedRuntime')) {
     Assert-True "upgrade harness contains $needle" ($text -match [regex]::Escape($needle))
   }
   Assert-True 'upgrade harness waits for asynchronous uninstall cleanup' ($text -match 'Wait-PathAbsent')

@@ -1,0 +1,15 @@
+{
+  "//": "The CPython runtime AFK AI installs and executes. Build input only: scripts/Get-PythonRuntime.ps1 downloads exactly this file, verifies size, SHA-256 (cross-checked against python.org's release API) and the PSF Authenticode signer, checks the ._pth isolation lines, and stages it under runtime/python. The product engine is standard-library only, so third_party_packages is empty by design and enforced by test_the_product_runtime_needs_no_third_party_packages. Update deliberately: bump version, url, size, sha256 and path_file together, then re-run the full gate and lifecycle qualification.",
+  "schema_version": 1,
+  "implementation": "CPython",
+  "version": "3.14.7",
+  "distribution": "embeddable-amd64",
+  "source_url": "https://www.python.org/ftp/python/3.14.7/python-3.14.7-embed-amd64.zip",
+  "size": 12673227,
+  "sha256": "D297E5FF019966817AD8502465176139F2D3D840FA4ED84B13BED399A6AB1F15",
+  "authenticode_subject": "CN=Python Software Foundation, O=Python Software Foundation, L=Beaverton, S=Oregon, C=US",
+  "signed_files": ["python.exe", "pythonw.exe", "python314.dll"],
+  "path_file": "python314._pth",
+  "path_file_entries": ["python314.zip", "."],
+  "third_party_packages": []
+}

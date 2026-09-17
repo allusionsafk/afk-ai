@@ -6,14 +6,17 @@ public sealed record ProcessSpec(
     string Purpose,
     string FileName,
     IReadOnlyList<string> Arguments,
-    string WorkingDirectory)
+    string WorkingDirectory,
+    IReadOnlyList<string> RemovedEnvironment)
 {
     public static ProcessSpec Hidden(
         string fileName,
         IEnumerable<string> arguments,
         string workingDirectory,
-        string purpose = "process") =>
-        new(purpose, fileName, arguments.ToArray(), Path.GetFullPath(workingDirectory));
+        string purpose = "process",
+        IEnumerable<string>? removedEnvironment = null) =>
+        new(purpose, fileName, arguments.ToArray(), Path.GetFullPath(workingDirectory),
+            (removedEnvironment ?? Array.Empty<string>()).ToArray());
 
     public ProcessStartInfo CreateStartInfo()
     {
@@ -30,6 +33,7 @@ public sealed record ProcessSpec(
             StandardErrorEncoding = System.Text.Encoding.UTF8
         };
         foreach (var argument in Arguments) info.ArgumentList.Add(argument);
+        foreach (var name in RemovedEnvironment) info.Environment.Remove(name);
         return info;
     }
 }

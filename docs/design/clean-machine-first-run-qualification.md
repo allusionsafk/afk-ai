@@ -6,7 +6,13 @@ clean Windows machine and is listed here so it can be run deliberately rather
 than assumed.
 
 **Nothing in the "not yet qualified" section below has been exercised end to
-end.** Do not describe the Friend Beta as clean-machine qualified until it has.
+end.** Do not describe the Beta as clean-machine qualified until it has.
+
+The product-shell and owned-runtime behaviour (engine-driven Home, Open Chat
+gate, bundled Python, repair, stale-file removal on upgrade) is described in
+[product-shell-runtime.md](product-shell-runtime.md). Its isolated upgrade and
+uninstall lifecycle has been exercised on real installer bytes; the steps below
+marked **(runtime)** have not yet run on a clean machine.
 
 ## What the automated gate already proves
 
@@ -65,7 +71,10 @@ Run in order. Record the reason code and the on-screen headline at each step.
 
 **First run**
 
-7. Install the candidate `AFKLocalAISetup-*.exe` and launch it.
+7. Confirm `py`, `python` and `pwsh` are NOT installed (`where py python pwsh`
+   finds nothing). Install the candidate `AFKLocalAISetup-*.exe` and launch it.
+   **(runtime)** Confirm setup starts without PowerShell 7 or Python, and that
+   `%LOCALAPPDATA%\Programs\AFK LocalAI\runtime\python\python.exe` exists.
 8. Expect a WSL blocker (`PREFLIGHT-WSL-NOT-INSTALLED`), headline "One step is
    needed", button "Install WSL components". Confirm it asks for Windows
    approval.
@@ -78,7 +87,7 @@ Run in order. Record the reason code and the on-screen headline at each step.
 11. Relaunch AFK LocalAI. Confirm it re-probes rather than trusting the previous
     result, and that it resumes at the first incomplete phase rather than from
     zero.
-12. Confirm no completed expensive step (model pull, pip install) is repeated.
+12. Confirm no completed expensive step (model download) is repeated.
 
 **Docker**
 
@@ -90,22 +99,51 @@ Run in order. Record the reason code and the on-screen headline at each step.
 
 **Provisioning**
 
-16. Continue setup. Confirm first model download runs once.
-17. Complete the Open WebUI first signup.
-18. Confirm GPU inference works if the machine has a supported GPU.
+16. Continue setup. Confirm first model download runs once and **(runtime)** the
+    progress bar moves with real percentages.
+17. **(runtime)** Confirm setup ends on Home and Home shows "Checking" before
+    "Your local AI is ready" (it must never appear before the engine's check).
+    Record the Home headline and `Logs\lifecycle-events.jsonl` tail.
+18. **(runtime)** Press Open Chat. Confirm the browser opens `127.0.0.1:3000`
+    and Open WebUI asks for the first account (onboarding). Complete signup.
+19. Confirm GPU inference works if the machine has a supported GPU.
+20. **(runtime)** Confirm nothing was written into the program folder:
+    no `.env`, `logs`, `__pycache__` or `*.egg-info` under
+    `%LOCALAPPDATA%\Programs\AFK LocalAI`; `Config\runtime.env` exists in the
+    data folder; no `__editable__.localai*.pth` exists in any Python.
+
+**Truthful state** **(runtime)**
+
+21. With Home showing Ready, stop the Open WebUI container from Docker Desktop.
+    Within 30 s Home must leave Ready; Open Chat must not open the browser.
+22. Quit Ollama. Home must report the model runtime is not running and offer
+    Start; Start must bring it back and re-qualify.
+23. Quit Docker Desktop, close and reopen AFK AI. It must show Stopped and start
+    its own services once; after pressing Stop it must not start them again in
+    that session.
+24. Create Diagnostics. Confirm the report's `classification` matches the
+    situation and that it contains no chat text, prompts, account names, or
+    other projects' container or model names.
 
 **Idempotence**
 
-19. Press "Check again" repeatedly at several stages; confirm no duplicate
+25. Press "Check again" repeatedly at several stages; confirm no duplicate
     installs, containers, or model pulls, and no contradictory checkpoint.
-20. Relaunch the app mid-setup; confirm it resumes rather than restarting.
+26. Relaunch the app mid-setup; confirm it resumes rather than restarting.
+27. **(runtime)** Run Repair. Confirm chats and the account survive, the model is
+    not re-downloaded, and Home returns to Ready.
 
 **Lifecycle**
 
-21. Uninstall. Confirm the program directory, `HKCU` uninstall entry and Start
-    Menu folder are removed, and that per-user state under
-    `%LOCALAPPDATA%\AFK LocalAI` is preserved.
-22. Confirm no shared Docker/Ollama state was touched: other compose projects
+28. **(runtime)** Install the next candidate over this one. Confirm chats,
+    `Config\runtime.env` and the model choice survive and Home re-qualifies.
+29. **(runtime)** Delete one file under `runtime\python`. Confirm Home shows
+    "AFK AI needs repair" and Start does not run.
+30. Uninstall. Confirm the program directory (entirely), `HKCU` uninstall entry
+    and Start Menu folder are removed, and that per-user state under
+    `%LOCALAPPDATA%\AFK LocalAI` and the `afk-localai_open-webui` volume are
+    preserved.
+31. Confirm no shared Docker/Ollama state was touched: other compose projects
     still running, Docker Desktop still running, no models removed.
 
 **States that still need a purpose-built machine**

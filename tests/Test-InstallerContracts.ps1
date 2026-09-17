@@ -202,28 +202,47 @@ if (Test-Path -LiteralPath $controllerPath) {
     $controller -notmatch '"-m"\s*,\s*"localai"' -and
     $controller -notmatch '"localai"' -and
     $controller -notmatch '"-3\.12"')
-  foreach ($command in @('Start', 'Stop', 'Health')) {
+  # Regression: the verified entry point was then launched with py.exe - the
+  # right package on whatever interpreter the Python launcher chose, with that
+  # interpreter's site-packages and PYTHON* settings. And setup ran pwsh.exe,
+  # which a clean Windows 11 does not have.
+  Assert-True 'app never starts a Python launcher, PATH Python or PowerShell 7' (
+    $controller -notmatch '"py\.exe"' -and $controller -notmatch '"python\.exe"\s*,' -and
+    $controller -notmatch '"pwsh\.exe"')
+  Assert-True 'app runs AFK AI''s own interpreter by path' (
+    $controller -match [regex]::Escape('Path.Combine(_paths.ProgramRoot, "runtime", "python", "python.exe")'))
+  foreach ($command in @('Start', 'Stop')) {
     $member = [regex]::Match($controller, "(?s)public ProcessSpec $command\(\).*?;")
     Assert-True "app exposes a $command command" $member.Success
     if ($member.Success) {
-      Assert-True "$command routes through the verified payload entry point" (
-        $member.Value -match 'Payload\(')
+      Assert-True "$command routes through the owned engine" ($member.Value -match 'Engine\(')
     }
   }
-  $payloadMember = [regex]::Match($controller, '(?s)private ProcessSpec Payload\(.*?\n    \}')
-  Assert-True 'app has one payload invocation helper' $payloadMember.Success
-  if ($payloadMember.Success) {
-    $payloadText = $payloadMember.Value
-    Assert-True 'payload commands run the by-path entry point' (
-      $payloadText -match [regex]::Escape('"afk-payload.py"'))
-    Assert-True 'payload commands pass an explicit program root' (
-      $payloadText -match [regex]::Escape('"--program-root"'))
+  foreach ($command in @('Status', 'Diagnostics')) {
+    $member = [regex]::Match($controller, "(?s)public ProcessSpec $command\(.*?;\r?\n")
+    Assert-True "app exposes a $command command" $member.Success
+    if ($member.Success) {
+      Assert-True "$command routes through the owned engine" ($member.Value -match 'Engine\(')
+    }
+  }
+  Assert-True 'the engineering health report is not a product command' ($controller -notmatch 'public ProcessSpec Health\(')
+  $engineMember = [regex]::Match($controller, '(?s)private ProcessSpec Engine\(.*?\n    \}')
+  Assert-True 'app has one engine invocation helper' $engineMember.Success
+  if ($engineMember.Success) {
+    $engineText = $engineMember.Value
+    Assert-True 'engine commands run the by-path entry point' ($engineText -match 'EngineEntryPoint')
+    Assert-True 'engine commands run the owned interpreter' ($engineText -match 'RuntimeInterpreter')
+    Assert-True 'engine commands pass an explicit program root' ($engineText -match [regex]::Escape('"--program-root"'))
+    Assert-True 'engine commands pass an explicit data root' ($engineText -match [regex]::Escape('"--data-root"'))
+    Assert-True 'engine commands are isolated from PYTHON* settings' ($engineText -match [regex]::Escape('"-I"'))
     # Importing the payload writes __pycache__ into the program directory.
     # Setup never installed those files, so its uninstaller never removes them,
     # and the installation survives the uninstall.
-    Assert-True 'payload commands leave no bytecode behind' (
-      $payloadText -match [regex]::Escape('"-B"'))
+    Assert-True 'engine commands leave no bytecode behind' ($engineText -match [regex]::Escape('"-B"'))
   }
+  Assert-True 'setup runs on the inbox Windows PowerShell' (
+    $controller -match '(?s)public ProcessSpec Provision\(.*?WindowsPowerShell\(' -and
+    $controller -match [regex]::Escape('"WindowsPowerShell", "v1.0", "powershell.exe"'))
 }
 
 if (Test-Path -LiteralPath $entryPointPath) {
@@ -238,17 +257,152 @@ if (Test-Path -LiteralPath $entryPointPath) {
     $entry -match 'Refusing to act')
   Assert-True 'entry point writes no bytecode into the installation' (
     $entry -match 'sys\.dont_write_bytecode\s*=\s*True')
-  Assert-True 'entry point serves stop, start and health' (
-    $entry -match [regex]::Escape('COMMANDS = ("stop", "start", "health")'))
-  # An uninstall must never fail; a Start or Health that did nothing must never
+  foreach ($command in @('status', 'start', 'stop', 'diagnostics')) {
+    Assert-True "entry point serves $command" ($entry -match "(?s)COMMANDS = \(.*`"$command`".*?\)")
+  }
+  Assert-True 'entry point does not serve the engineering health report' ($entry -notmatch '"health"')
+  # An uninstall must never fail; any other command that did nothing must never
   # report success.
-  Assert-True 'a refused uninstall still succeeds' (
-    $entry -match '"stop"\s*:\s*0')
-  Assert-True 'a refused start reports failure' (
-    $entry -match '"start"\s*:\s*[1-9]')
-  Assert-True 'a refused health reports failure' (
-    $entry -match '"health"\s*:\s*[1-9]')
+  Assert-True 'a refused uninstall still succeeds' ($entry -match '(?m)^STOP_REFUSAL_EXIT = 0$')
+  Assert-True 'every other refused command reports failure' ($entry -match '(?m)^REFUSAL_EXIT = [1-9]$')
   Assert-True 'unknown commands fail closed' ($entry -match 'Usage:')
+  # Before importing anything: the interpreter must be THIS installation's own,
+  # isolated from site-packages and PYTHON* variables, at the pinned version.
+  Assert-True 'entry point proves it runs on the owned interpreter' (
+    $entry -match 'def verify_interpreter' -and $entry -match 'RUNTIME_DIR = \("runtime", "python"\)')
+  Assert-True 'entry point requires an isolated interpreter' (
+    $entry -match 'flags\.isolated' -and $entry -match 'flags\.no_site')
+  Assert-True 'entry point checks the runtime version against its pin' ($entry -match 'afk-runtime\.json')
+  $verifyCall = $entry.IndexOf('problem = verify_interpreter(program_root)')
+  $loadCall = $entry.IndexOf('problem = load_payload(program_root)')
+  Assert-True 'entry point verifies the interpreter before loading the payload' (
+    $verifyCall -ge 0 -and $loadCall -gt $verifyCall) "verify=$verifyCall load=$loadCall"
+}
+
+Write-Host '-- owned Python runtime contract' -ForegroundColor Cyan
+$runtimePinPath = Require-File 'installer/python-runtime.json'
+$runtimeFetchPath = Require-File 'scripts/Get-PythonRuntime.ps1'
+if (Test-Path -LiteralPath $runtimePinPath) {
+  $pin = Get-Content -LiteralPath $runtimePinPath -Raw | ConvertFrom-Json
+  Assert-True 'runtime pin names conventional CPython' ($pin.implementation -eq 'CPython' -and $pin.version -match '^3\.\d+\.\d+$')
+  Assert-True 'runtime pin comes from python.org' ($pin.source_url -match '^https://www\.python\.org/ftp/python/[0-9.]+/python-[0-9.]+-embed-amd64\.zip$')
+  Assert-True 'runtime pin version matches its archive' ($pin.source_url -match [regex]::Escape("/$($pin.version)/python-$($pin.version)-embed"))
+  Assert-True 'runtime archive digest is pinned' ($pin.sha256 -match '^[0-9A-F]{64}$' -and [int64]$pin.size -gt 1MB)
+  Assert-True 'runtime publisher signature is pinned' ($pin.authenticode_subject -match 'O=Python Software Foundation')
+  Assert-True 'runtime ships no third-party packages' (@($pin.third_party_packages).Count -eq 0)
+  Assert-True 'runtime search path is exactly its own archive and folder' (
+    (@($pin.path_file_entries) -join '|') -eq "python$(($pin.version -split '\.')[0..1] -join '').zip|.")
+}
+if (Test-Path -LiteralPath $runtimeFetchPath) {
+  $fetch = Get-ContractText -Path $runtimeFetchPath
+  Assert-True 'runtime fetch verifies size and SHA-256' ($fetch -match 'Get-FileHash' -and $fetch -match 'SHA256' -and $fetch -match '\.size')
+  Assert-True 'runtime fetch verifies the publisher signature' ($fetch -match 'Get-AuthenticodeSignature' -and $fetch -match 'authenticode_subject')
+  Assert-True 'runtime fetch verifies the isolated search path' ($fetch -match 'path_file_entries')
+  Assert-True 'runtime fetch proves isolation by running the interpreter' ($fetch -match 'sys\.flags\.isolated' -and $fetch -match 'no_site')
+  Assert-True 'runtime fetch only writes under build' ($fetch -match 'outside the build directory')
+
+  # Behaviour, not text: a tampered cached archive must be refused, offline, before
+  # anything is extracted or staged.
+  $probeRoot = Join-Path $Root ('build/contract-runtime-' + [guid]::NewGuid().ToString('n'))
+  try {
+    $probeCache = Join-Path $probeRoot 'cache'
+    [void](New-Item -ItemType Directory -Path $probeCache -Force)
+    $pinned = Get-Content -LiteralPath $runtimePinPath -Raw | ConvertFrom-Json
+    $archiveName = [IO.Path]::GetFileName(([Uri]$pinned.source_url).AbsolutePath)
+    [IO.File]::WriteAllBytes((Join-Path $probeCache $archiveName), [byte[]](1..64))
+    $refused = $false
+    try {
+      & $runtimeFetchPath -StagingRoot (Join-Path $probeRoot 'runtime') -CacheRoot $probeCache -Offline | Out-Null
+    } catch { $refused = $true }
+    Assert-True 'a tampered runtime archive is refused offline' $refused
+    Assert-True 'a refused runtime is never staged' (-not (Test-Path -LiteralPath (Join-Path $probeRoot 'runtime')))
+  } finally {
+    Remove-Item -LiteralPath $probeRoot -Recurse -Force -ErrorAction SilentlyContinue
+  }
+}
+if (Test-Path -LiteralPath $stagePath) {
+  $stage = Get-ContractText -Path $stagePath
+  Assert-True 'payload requires the owned runtime' ($stage -match '\[Parameter\(Mandatory\)\]\[string\]\$RuntimeRoot')
+  Assert-True 'payload refuses links inside the runtime' ($stage -match 'ReparsePoint')
+  Assert-True 'payload refuses a runtime with installed packages' ($stage -match 'site-packages')
+  Assert-True 'payload hashes the runtime into the manifest' (
+    $stage.IndexOf("Join-Path `$staging 'runtime'") -ge 0 -and
+    $stage.IndexOf("Join-Path `$staging 'runtime'") -lt $stage.IndexOf('Get-FileHash'))
+}
+if (Test-Path -LiteralPath $buildPath) {
+  $build = Get-ContractText -Path $buildPath
+  Assert-True 'build stages the verified runtime before the payload' (
+    $build.IndexOf('Get-PythonRuntime.ps1') -ge 0 -and
+    $build.IndexOf('Get-PythonRuntime.ps1') -lt $build.IndexOf('New-ReleasePayload.ps1'))
+}
+if (Test-Path -LiteralPath $issPath) {
+  $issText = Get-ContractText -Path $issPath
+  # Setup copies new files but never removes ones a newer version dropped; a
+  # stale module would stay importable beside a new interpreter.
+  foreach ($tree in @('runtime', 'src', 'installer')) {
+    Assert-True "update replaces the $tree tree wholesale" (
+      $issText -match "(?s)\[InstallDelete\].*Type: filesandordirs; Name: `"\{app\}\\$tree`"")
+  }
+  Assert-True 'uninstall removes legacy program-folder leftovers only inside {app}' (
+    $issText -match '(?s)\[UninstallDelete\].*\{app\}\\logs' -and
+    $issText -notmatch '(?s)\[UninstallDelete\].*(localappdata|userappdata|\{%)')
+
+  # Adversarial review of PR #24 reproduced data loss: pointed at an existing
+  # folder of the user's, Setup deleted its runtime/src/installer/logs folders.
+  # Destructive cleanup is allowed only in a folder AFK provably owns.
+  $installDelete = [regex]::Match($issText, '(?ms)^\[InstallDelete\][ \t]*$(.*?)(?=^\[)').Groups[1].Value
+  $deleteEntries = @($installDelete -split "`r?`n" | Where-Object { $_ -match '^\s*Type:' })
+  Assert-True 'install cleanup has entries to guard' ($deleteEntries.Count -ge 4)
+  Assert-True 'every install cleanup entry requires AFK ownership of the folder' (
+    -not @($deleteEntries | Where-Object { $_ -notmatch ';\s*Check:\s*AppDirIsOwned\s*$' }).Count) ($deleteEntries -join ' | ')
+  $code = [regex]::Match($issText, '(?ms)^\[Code\][ \t]*$(.*?)(?=^\[)').Groups[1].Value
+  $ownedFn = [regex]::Match($code, '(?s)function IsAfkOwnedDir.*?\bend;\s*\r?\n\r?\n').Value
+  $registeredFn = [regex]::Match($code, '(?s)function IsRegisteredAfkInstallation.*?\bend;\s*\r?\n\r?\n').Value
+  Assert-True 'ownership is the registered installation of THIS AppId at THIS folder, plus an AFK artifact' (
+    $registeredFn -match [regex]::Escape('RegQueryStringValue(HKA,') -and
+    $registeredFn -match [regex]::Escape('{#SetupSetting("AppId")}') -and
+    $registeredFn -match [regex]::Escape("'Inno Setup: App Path'") -and
+    $registeredFn -match 'SamePath\(Registered, Dir\)' -and
+    $registeredFn -match "AFKLocalAI\.exe")
+  Assert-True 'a folder name is never ownership evidence' (
+    $ownedFn -and $ownedFn -notmatch '(?i)AFK LocalAI|ExtractFileName|Pos\(' -and
+    $registeredFn -notmatch '(?i)AFK LocalAI''|ExtractFileName|Pos\(')
+  Assert-True 'a non-empty foreign folder is refused before anything changes' (
+    $code -match '(?s)function PrepareToInstall.*?IsAfkOwnedDir\(ExpandConstant\(''\{app\}''\)\).*?ForeignDirMessage' -and
+    $code -match '(?s)function AppDirIsOwned.*?OwnershipDecided and OwnedDir')
+  Assert-True 'the folder picker refuses a foreign folder too' (
+    $code -match '(?s)function NextButtonClick.*?wpSelectDir.*?IsAfkOwnedDir\(WizardDirValue\)')
+}
+$upgradePath = Require-File 'scripts/Test-LifecycleUpgrade.ps1'
+if (Test-Path -LiteralPath $upgradePath) {
+  $upgradeText = Get-ContractText -Path $upgradePath
+  Assert-True 'upgrade qualification proves a foreign folder is refused and preserved' (
+    $upgradeText -match 'foreign_directory_refused = \$false' -and
+    $upgradeText -match 'foreign_directory_preserved = \$false' -and
+    $upgradeText -match [regex]::Escape("('/DIR=' + `$foreignRoot)"))
+  Assert-True 'upgrade qualification still proves stale owned files are removed' (
+    $upgradeText -match 'stale_program_files_removed = -not')
+}
+$orchestratorPath = Require-File 'installer/Install-LocalAI.ps1'
+if (Test-Path -LiteralPath $orchestratorPath) {
+  $orchestratorText = Get-ContractText -Path $orchestratorPath
+  Assert-True 'setup runs on Windows PowerShell 5.1' ($orchestratorText -match '(?m)^#requires -Version 5\.1$')
+  Assert-True 'setup never installs Python machine-wide' ($orchestratorText -notmatch 'Python\.Python')
+  Assert-True 'setup never pip-installs into the PC''s Python' (
+    $orchestratorText -notmatch '(?i)pip\s+install' -and $orchestratorText -notmatch '[''"]-m[''"]\s*,\s*[''"]pip[''"]')
+  Assert-True 'setup never resolves the ambient localai package' ($orchestratorText -notmatch '[''"]-m[''"]\s*,\s*[''"]localai' -and $orchestratorText -notmatch 'Resolve-Python\b')
+  Assert-True 'setup runs the owned engine by path' ($orchestratorText -match [regex]::Escape("runtime\python\python.exe") -and $orchestratorText -match 'afk-payload\.py')
+}
+if (Test-Path -LiteralPath $manifestPath) {
+  $shipped = @(Get-Content -LiteralPath $manifestPath | ForEach-Object { $_.Trim() })
+  foreach ($module in @(Get-ChildItem -LiteralPath (Join-Path $Root 'src/localai') -Filter *.py -File)) {
+    $relative = "src/localai/$($module.Name)"
+    & git -C $Root ls-files --error-unmatch -- $relative 1>$null 2>$null
+    $tracked = $LASTEXITCODE -eq 0
+    if ($tracked -or $module.Name -like 'product_*' -or $module.Name -in @('installation.py', 'diagnostics.py')) {
+      Assert-True "payload ships product module $relative" ($shipped -contains $relative)
+    }
+  }
 }
 
 if (Test-Path -LiteralPath $ownershipPath) {
@@ -278,16 +432,29 @@ if (Test-Path -LiteralPath $ownershipPath) {
   # Compose resolves targets from the project name and the service names in the
   # file, ignoring the config_files label. Verified against a live daemon: a
   # compose stop scoped with one file stopped a container labelled as belonging
-  # to a different file. The shipped compose declares "name: localai" and so
-  # does the private workbench's, so acting by project name would hand execution
-  # to a weaker key than the proof. Act on the proven container ids instead.
+  # to a different file. Another checkout can declare the same project name, so
+  # acting by project name would hand execution to a weaker key than the proof.
+  # Act on the proven container ids instead.
   Assert-True 'ownership stops the proven containers by id' (
     $ownershipBody -match [regex]::Escape('"stop", *stack.container_ids'))
   Assert-True 'ownership never delegates to a project-scoped compose command' (
     $ownershipBody -notmatch [regex]::Escape('"--project-name"') -and
     $ownershipBody -notmatch [regex]::Escape('"compose"'))
-  Assert-True 'ownership fails closed on conflicting projects' (
-    $ownershipBody -match 'conflicting project names')
+  # Path alone is not ownership: the 0.1.7 release candidate left containers
+  # with THIS installation's compose path under project "localai", and treating
+  # them as owned made Stop refuse and Home read the current stack as stopped.
+  Assert-True 'ownership requires the AFK project as well as the config path' (
+    $ownershipBody -match [regex]::Escape('AFK_COMPOSE_PROJECT = "afk-localai"') -and
+    $ownershipBody -match 'project == AFK_COMPOSE_PROJECT and _same_path' -and
+    $ownershipBody -match 'if not is_owned_container\(config_files, project, compose_file\)')
+  $readinessText = Get-ContractText -Path (Require-File 'src/localai/readiness.py')
+  Assert-True 'readiness decides ownership with the same two-key rule as stop' (
+    $readinessText -match 'if not is_owned_container\(config_files, row_project, compose_file\)' -and
+    $readinessText -notmatch 'compose_project_name')
+  $runtimeText = Get-ContractText -Path (Require-File 'src/localai/product_runtime.py')
+  Assert-True 'compose up names the AFK project explicitly' (
+    $runtimeText -match '"--project-name",\s*AFK_COMPOSE_PROJECT,' -and
+    $runtimeText -match 'env=compose_env\(\)' -and $runtimeText -notmatch 'env=docker_env\(\)')
 }
 
 if (Test-Path -LiteralPath $manifestPath) {

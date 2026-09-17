@@ -1,4 +1,10 @@
 @echo off
+setlocal
+rem Started from a PowerShell 7 terminal, cmd inherits PowerShell 7's module path
+rem and Windows PowerShell then cannot load its own Get-FileHash or
+rem Invoke-WebRequest, so the integrity check below could never pass. Let
+rem Windows PowerShell compute its own default module path.
+set "PSModulePath="
 title AFK AI - installer
 echo.
 echo   AFK AI - guided installer
@@ -13,14 +19,22 @@ echo   old folder aside by itself and starts fresh.
 echo.
 
 rem If this .cmd sits inside the downloaded repo, run the local bootstrap.
-rem Otherwise (someone downloaded just this one file), fetch it from master.
+rem Otherwise (someone downloaded just this one file), fetch the bootstrap from
+rem an IMMUTABLE commit and verify its SHA-256 before PowerShell may run it.
+rem Fetching from master put every change to master between this launcher and
+rem the pinned release. Release order: tag, pin bootstrap.ps1, then pin here.
 set "BOOT=%~dp0installer\bootstrap.ps1"
 if exist "%BOOT%" goto :run
 
+set "BOOTSTRAP_COMMIT=78b4b13aaf32e4eff8b8a6cb9773e5aff7a289ef"
+set "BOOTSTRAP_SHA256=440B3308BC11A3CA96432170A026B20AC7BA5A087C62B36112A4659CF3F619EF"
+set "BOOT=%TEMP%\localai-bootstrap-%BOOTSTRAP_COMMIT%.ps1"
+set "BOOT_URL=https://raw.githubusercontent.com/allusionsafk/localai-windows-starter/%BOOTSTRAP_COMMIT%/installer/bootstrap.ps1"
+
 echo   Downloading the installer...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/allusionsafk/localai-windows-starter/master/installer/bootstrap.ps1' -OutFile ($env:TEMP + '\localai-bootstrap.ps1')"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; $out=$env:BOOT; Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue; Invoke-WebRequest -UseBasicParsing $env:BOOT_URL -OutFile $out; $actual=(Get-FileHash -LiteralPath $out -Algorithm SHA256).Hash.ToUpperInvariant(); $expected=$env:BOOTSTRAP_SHA256.ToUpperInvariant(); if ($actual -ne $expected) { Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue; Write-Error ('Installer integrity check failed. Expected SHA-256 ' + $expected + ', got ' + $actual + '. Refusing to run the downloaded bootstrap.'); exit 23 }"
 if errorlevel 1 goto :failed
-set "BOOT=%TEMP%\localai-bootstrap.ps1"
+if not exist "%BOOT%" goto :failed
 
 :run
 echo   Starting the installer...

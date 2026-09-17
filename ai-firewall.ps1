@@ -1,4 +1,4 @@
-#requires -Version 7.0
+#requires -Version 5.1
 <#
   ai-firewall.ps1 - Audit and repair the intended localai firewall posture.
 
@@ -58,6 +58,23 @@ function Test-Admin {
   return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+function Get-SelfElevatedApplyArguments([string]$ScriptPath, [string]$LogPath) {
+  # Both paths go inside single-quoted literals of the elevated -Command. A
+  # profile or install path with an apostrophe (O'Brien, or the typographic
+  # U+2019 that PowerShell also treats as a quote) would otherwise end the
+  # literal early, the firewall rule would never be applied, and setup - which
+  # requires a verified rule - could never finish.
+  $escape = [System.Management.Automation.Language.CodeGeneration]
+  $script = $escape::EscapeSingleQuotedStringContent($ScriptPath)
+  $log = $escape::EscapeSingleQuotedStringContent($LogPath)
+  $command = "& '$script' -Apply -NoSelfElevate *>&1 | Tee-Object -FilePath '$log'; exit `$LASTEXITCODE"
+  return @(
+    '-NoProfile',
+    '-ExecutionPolicy', 'Bypass',
+    '-Command', $command
+  )
+}
+
 function Invoke-SelfElevatedApply {
   $hostExe = (Get-Command 'pwsh.exe' -ErrorAction SilentlyContinue).Source
   if (-not $hostExe) { $hostExe = (Get-Command 'powershell.exe' -ErrorAction SilentlyContinue).Source }
@@ -66,12 +83,7 @@ function Invoke-SelfElevatedApply {
   $logDir = Join-Path $PSScriptRoot 'logs'
   New-Item -ItemType Directory -Force -Path $logDir | Out-Null
   $logPath = Join-Path $logDir 'firewall-apply.log'
-  $command = "& '$PSCommandPath' -Apply -NoSelfElevate *>&1 | Tee-Object -FilePath '$logPath'; exit `$LASTEXITCODE"
-  $cmdArgs = @(
-    '-NoProfile',
-    '-ExecutionPolicy', 'Bypass',
-    '-Command', $command
-  )
+  $cmdArgs = Get-SelfElevatedApplyArguments -ScriptPath $PSCommandPath -LogPath $logPath
   $p = Start-Process -FilePath $hostExe -Verb RunAs -ArgumentList $cmdArgs -Wait -PassThru
   if (Test-Path -LiteralPath $logPath) {
     Get-Content -LiteralPath $logPath | ForEach-Object { Write-Host $_ }

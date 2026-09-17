@@ -153,6 +153,26 @@ if (Test-Path -LiteralPath $recoveryTests) {
     Add-Result 'Installer recovery tests' $recoveryOk $recoveryDetail
 }
 
+# 6c2. Setup binds Ollama to 0.0.0.0, so its firewall rule is part of the
+#      security invariant. Setup runs on inbox Windows PowerShell 5.1, so this
+#      suite runs THERE - pwsh passing it would prove nothing. Fixture-only: it
+#      never reads or changes this PC's firewall.
+$firewallTests = Join-Path $PSScriptRoot 'Test-InstallerFirewall.ps1'
+$windowsPowerShell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+if (-not (Test-Path -LiteralPath $firewallTests)) {
+    Add-Result 'Installer firewall tests (PS 5.1)' $false 'Test-InstallerFirewall.ps1 missing'
+} elseif (-not $env:WINDIR -or -not (Test-Path -LiteralPath $windowsPowerShell)) {
+    Add-Result 'Installer firewall tests (PS 5.1)' $true 'SKIPPED (Windows PowerShell 5.1 not present)'
+} else {
+    $fwOut = & $windowsPowerShell -NoProfile -ExecutionPolicy Bypass -File $firewallTests 2>&1
+    $fwOk = ($LASTEXITCODE -eq 0)
+    $fwLines = @($fwOut | ForEach-Object { "$_" })
+    $fwSummary = @($fwLines | Where-Object { $_ -match 'FIREWALL TESTS' } | Select-Object -First 1)
+    $fwDetail = if ($fwSummary) { "$($fwSummary[0])".Trim() } else { ($fwLines | Select-Object -Last 1) }
+    if (-not $fwOk) { $fwDetail = (@($fwLines | Select-Object -Last 12) -join ' | ') }
+    Add-Result 'Installer firewall tests (PS 5.1)' $fwOk $fwDetail
+}
+
 # 6d. Native installer and deterministic payload contracts.
 $installerTests = Join-Path $PSScriptRoot 'Test-InstallerContracts.ps1'
 if (Test-Path -LiteralPath $installerTests) {

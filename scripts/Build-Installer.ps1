@@ -46,10 +46,18 @@ $publishArguments = @(
 & dotnet @publishArguments
 if ($LASTEXITCODE -ne 0) { throw 'Native shell publish failed.' }
 
+# The pinned, verified CPython the installed product executes. Staged before the
+# payload manifest is computed, so every runtime file is hashed into it.
+$runtime = & (Join-Path $Root 'scripts/Get-PythonRuntime.ps1') -StagingRoot (Join-Path $buildRoot 'runtime')
+if (-not $runtime -or -not (Test-Path -LiteralPath (Join-Path $runtime.RuntimeRoot 'afk-runtime.json'))) {
+  throw 'Owned Python runtime staging failed.'
+}
+
 $payloadParameters = @{
   SourceRoot = $Root
   StagingRoot = $payloadRoot
   ShellPublishRoot = $shellRoot
+  RuntimeRoot = $runtime.RuntimeRoot
   Commit = $commit
 }
 $payload = & (Join-Path $Root 'scripts/New-ReleasePayload.ps1') @payloadParameters

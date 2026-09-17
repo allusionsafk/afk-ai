@@ -26,6 +26,7 @@ pin or prove that candidate installer bytes have been published.
 | [0.2.0-rc1 candidate notes](releases/0.2.0-rc1.md) | Prerelease scope, qualification policy, and external-machine gap |
 | [Install, upgrade, and uninstall](install-upgrade-uninstall.md) | Program/state locations and lifecycle boundaries |
 | [Windows distribution](../installer/README.md) | Native shell, Inno package, deterministic payload, and release discipline |
+| [Product shell and app-owned runtime](design/product-shell-runtime.md) | Status contract, Open Chat gate, bundled Python trust chain, ownership categories, diagnostics privacy |
 | [Compose project identity](design/compose-project-identity.md) | AFK-owned container, network, volume, and backend-health boundary |
 | [Clean-machine first run](design/clean-machine-first-run-qualification.md) | Qualification checklist and unproven clean-machine path |
 

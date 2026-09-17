@@ -1,27 +1,39 @@
-#requires -Version 7.0
+#requires -Version 5.1
 <#
-  Install-LocalAI.ps1 - the guided "Friend Bootstrapper" orchestrator.
+  Install-LocalAI.ps1 - AFK AI's guided setup orchestrator.
 
-  Takes a clean-ish Windows box to a working, LOOPBACK-ONLY localai stack matched
-  to its hardware and intent, with a passing self-test and zero network exposure
-  unless explicitly opted in. It WRAPS this repo's existing scripts/compose/
-  Modelfiles - it does not reimplement them.
+  Takes a Windows 11 PC to a working local AI matched to its hardware, qualified
+  by the product's own readiness check. Chat is published on 127.0.0.1 only. The
+  model runtime must listen on all interfaces for the chat container to reach it,
+  so setup does not finish until a firewall rule blocking AFK AI's ports on
+  physical networks has been applied AND read back (Invoke-PhaseSecure).
 
-  Resumable: phase completion is recorded in installer-state.json so a
-  Docker-Desktop reboot mid-run can be resumed with -Resume. -DryRun prints every
-  action and changes nothing. See installer/README.md for the design.
+  Runs on the Windows PowerShell 5.1 that ships with Windows 11: the native app
+  launches it with powershell.exe, so a clean PC needs no PowerShell 7 to set up.
 
-  Usage:
-    pwsh -ExecutionPolicy Bypass -File installer/Install-LocalAI.ps1
-    ... -Intent chat,web -AcceptDefaults        # non-interactive
+  All product work (runtime configuration, model download, starting services,
+  seeding Open WebUI, qualification) is done by AFK AI's OWN engine on AFK AI's
+  OWN pinned Python runtime, invoked by path from this installation. Nothing is
+  installed into, or resolved from, the PC's own Python.
+
+  Resumable: phase completion is recorded in installer-state.json under the data
+  root, so a restart mid-run resumes with -Resume. -Repair re-runs every product
+  phase while keeping the hardware tier, intent and model choice; it never
+  removes chats, accounts or AFK AI's Docker volumes. -DryRun prints every action
+  and changes nothing.
+
+  Usage (the native app does this for you):
+    powershell -ExecutionPolicy Bypass -File installer/Install-LocalAI.ps1 -AcceptDefaults
+    ... -Resume                                  # continue after a restart
+    ... -Repair                                  # re-run product setup steps
     ... -DryRun                                  # print the plan, execute nothing
-    ... -Resume                                  # continue after a reboot
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
   [string]$Intent = '',
   [switch]$AcceptDefaults,
   [switch]$Resume,
+  [switch]$Repair,
   [switch]$DryRun,
   [string]$DataRoot = (Join-Path $env:LOCALAPPDATA 'AFK LocalAI\State'),
   [switch]$EventStream,
@@ -38,6 +50,9 @@ $RepoRoot = (Resolve-Path -LiteralPath (Split-Path -Parent $PSScriptRoot)).Path
 Set-InstallerEventStream -Enabled ([bool]$EventStream)
 
 $DataRoot = [System.IO.Path]::GetFullPath($DataRoot)
+# The engine's data root is the folder that holds State, Config, Logs and
+# Diagnostics; this script's -DataRoot has always named its State folder.
+$ProductDataRoot = Split-Path -Parent $DataRoot
 $LegacyInstallRoot = [System.IO.Path]::GetFullPath($LegacyInstallRoot)
 $StatePath = Get-InstallerStatePath -Root $DataRoot
 $TiersPath = Join-Path $PSScriptRoot 'tiers.json'
@@ -45,6 +60,13 @@ $Tiers = Get-Content -LiteralPath $TiersPath -Raw | ConvertFrom-Json
 $State = Import-InstallerState -Path $StatePath
 $State.legacy_install = [pscustomobject]@{ detected = [bool](Test-Path -LiteralPath $LegacyInstallRoot -PathType Container) }
 if (-not $Resume) { $State.pending_reboot = [pscustomobject]@{ required = $false; reason = $null } }
+
+# Product phases a repair re-runs. The machine checks always re-run anyway, and
+# the hardware tier and intent are the user's choices, so they are kept.
+$RepairPhases = @('runtime', 'scout', 'ollama-docker', 'pulls', 'compose', 'seed', 'secure', 'self-test')
+if ($Repair) {
+  $State.phases_done = @(@($State.phases_done) | Where-Object { $_ -notin $RepairPhases -and $_ -notin @('python', 'pip') })
+}
 
 # Canonical intent ids (audit finding 14: one id, display labels map to it).
 $IntentLabels = [ordered]@{
@@ -54,66 +76,64 @@ $IntentLabels = [ordered]@{
   voice  = 'voice'
 }
 
-function Test-PythonCandidate {
-  # A candidate must actually run AND be >=3.12 before we trust it. Guards
-  # against the Microsoft Store python.exe alias stub, stale py launchers that
-  # don't know 3.12 (they exit with 'Python 3.12 not found' / 103), and old
-  # pythons shadowing a fresh install (clean-VM finding, v0.1.4).
-  param([Parameter(Mandatory)][string[]]$Candidate)
-  $rest = Get-PyRest -Py $Candidate
-  $probe = Invoke-AiProcess -FilePath $Candidate[0] `
-    -ArgumentList ($rest + @('-c', 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)')) -TimeoutSec 20
-  return ($probe.Code -eq 0)
-}
+# ------------------------------------------------------------ AFK AI engine
 
-function Resolve-Python {
-  # Prefer the py launcher pinned to 3.12, else a real python on PATH, else
-  # winget's default per-user install dir (PATH can be stale even after
-  # Update-SessionPath). Every candidate is probed before use; only a probed
-  # success is cached.
-  # Unary commas below: a single-element candidate like @('...\python.exe')
-  # otherwise unrolls to a bare string on return, and $py[0] then indexes the
-  # STRING - the installer literally tried to start a process named 'C'
-  # (clean-VM bug, v0.1.5).
-  if ($script:ResolvedPython) { return , $script:ResolvedPython }
-  Update-SessionPath
-  $candidates = @()
-  $py = Get-Command 'py.exe' -ErrorAction SilentlyContinue
-  if ($py) { $candidates += , @($py.Source, '-3.12') }
-  $python = Get-Command 'python.exe' -ErrorAction SilentlyContinue
-  if ($python -and $python.Source -notmatch '\\WindowsApps\\') {
-    # WindowsApps python.exe is the Store redirect stub, not an interpreter.
-    $candidates += , @($python.Source)
-  }
-  $direct = Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312\python.exe'
-  if (Test-Path -LiteralPath $direct) { $candidates += , @($direct) }
-  foreach ($candidate in $candidates) {
-    if (Test-PythonCandidate -Candidate $candidate) {
-      $script:ResolvedPython = @($candidate)
-      return , $script:ResolvedPython
+function Get-OwnedEngine {
+  <#
+    AFK AI's own interpreter and entry point, by path, from THIS installation.
+    There is deliberately no fallback to py.exe, python.exe or PATH: the entry
+    point itself also refuses any interpreter that is not this one.
+  #>
+  $python = Join-Path $RepoRoot 'runtime\python\python.exe'
+  $entry = Join-Path $PSScriptRoot 'afk-payload.py'
+  foreach ($required in @($python, $entry)) {
+    if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
+      throw "AFK AI's own runtime is missing ($required). Reinstall AFK AI to repair it; your chats and settings are kept."
     }
   }
-  return $null
+  return [pscustomobject]@{ Python = $python; Entry = $entry }
 }
 
-function Get-PyRest {
-  # The launcher args after the executable (e.g. '-3.12'), or @() for python.exe.
-  # The unary comma prevents PowerShell from unrolling a single-element array
-  # into a bare string on return - without it, '-3.12' + @('-m','pip') string-
-  # concatenates into the single mangled argument '-3.12-m pip' (clean-VM bug,
-  # v0.1.5).
-  param([Parameter(Mandatory)][string[]]$Py)
-  if ($Py.Count -gt 1) { return , @($Py[1..($Py.Count - 1)]) }
-  return , @()
+function Get-EngineArguments {
+  param([Parameter(Mandatory)][string[]]$Arguments)
+  $engine = Get-OwnedEngine
+  return , (@('-I', '-B', $engine.Entry, '--program-root', $RepoRoot, '--data-root', $ProductDataRoot) + $Arguments)
 }
 
-function Invoke-Localai {
-  # Run `python -m localai <args>` from the repo, streaming to the console.
+function Invoke-Engine {
+  # Captured run with a bounded timeout. Returns @{ Code; Text }.
   param([Parameter(Mandatory)][string[]]$Arguments, [int]$TimeoutSec = 600)
-  $py = Resolve-Python
-  if (-not $py) { throw 'Python not found; run the Prerequisites phase first.' }
-  $full = (Get-PyRest -Py $py) + @('-m', 'localai') + $Arguments
-  return (Invoke-AiProcess -FilePath $py[0] -ArgumentList $full -TimeoutSec $TimeoutSec -WorkingDirectory $RepoRoot)
+  $engine = Get-OwnedEngine
+  return (Invoke-AiProcess -FilePath $engine.Python -ArgumentList (Get-EngineArguments -Arguments $Arguments) `
+      -TimeoutSec $TimeoutSec -WorkingDirectory $RepoRoot)
+}
+
+function Invoke-EngineStreaming {
+  <#
+    Run an engine command and relay every line while it runs, so AFK-EVENT
+    progress (model download percentages, service start-up) reaches the native
+    app live instead of after the work is over. Returns the exit code and the
+    last AFK-STATUS line, if any.
+  #>
+  param([Parameter(Mandatory)][string[]]$Arguments)
+  $engine = Get-OwnedEngine
+  $engineArguments = Get-EngineArguments -Arguments $Arguments
+  $status = $null
+  # Windows PowerShell 5.1 turns a native command's stderr into terminating
+  # errors under 'Stop'; the engine's stderr is diagnostic text, not failure.
+  $previous = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    & $engine.Python @engineArguments 2>&1 | ForEach-Object {
+      $line = "$_"
+      if ($line.StartsWith('AFK-STATUS:')) { $status = $line.Substring(11) }
+      [Console]::Out.WriteLine($line)
+    }
+    $code = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previous
+  }
+  return [pscustomobject]@{ Code = $code; Status = $status }
 }
 
 # ------------------------------------------------- environment preflight/gate
@@ -136,7 +156,7 @@ function Stop-ForUserAction {
   )
   Write-Card $Title $Lines
   Write-InstallerEvent -EventType 'checkpoint' -Phase 'environment-preflight' `
-    -Status 'action-required' -Code 'checkpoint' -Message ($Lines -join ' ')
+    -Status 'action-required' -Code 'checkpoint' -Message ($Lines -join ' ') | ForEach-Object { [Console]::Out.WriteLine($_) }
   if ($Checkpoint) { $State.preflight = $Checkpoint }
   if ($RebootReason) {
     $State.pending_reboot = [pscustomobject]@{ required = $true; reason = $RebootReason }
@@ -158,7 +178,7 @@ function Invoke-EnvironmentProbe {
 
 function Assert-EnvironmentReady {
   <#
-    The live gate. Called before the Python/model work and again immediately
+    The live gate. Called before the product setup work and again immediately
     before the model pull, so a Docker Desktop that stopped mid-install cannot
     be papered over by a phase that was marked done twenty minutes ago.
   #>
@@ -189,7 +209,7 @@ function Invoke-PhaseEnvironmentPreflight {
   #>
   [CmdletBinding(SupportsShouldProcess)]
   param()
-  Write-Card 'Phase 0 - Checking this PC' @(
+  Write-Card 'Checking this PC' @(
     'Looking at Windows virtualization, WSL and Docker before downloading anything.')
   if ($DryRun) {
     Write-Host '   [dry-run] would probe Windows virtualization / WSL / Docker (read-only)' -ForegroundColor DarkGray
@@ -201,7 +221,7 @@ function Invoke-PhaseEnvironmentPreflight {
 
   if (Test-EnvironmentReady -Result $result) {
     $State.preflight = Get-PreflightCheckpoint -Result $result
-    Write-Card 'Phase 0 - Ready' @('Windows virtualization and the local Docker engine look healthy.')
+    Write-Card 'This PC is ready' @('Windows virtualization and the local Docker engine look healthy.')
     return
   }
 
@@ -213,7 +233,7 @@ function Invoke-PhaseEnvironmentPreflight {
     $result.WindowsVirtualization.Status -eq 'READY'
   )
   if ($onlyDockerMissing -and $PSCmdlet.ShouldProcess('Docker Desktop', 'winget install')) {
-    Write-Card 'Phase 0 - Docker Desktop' @(
+    Write-Card 'Installing Docker Desktop' @(
       'Docker Desktop is missing but this PC can run it. Installing it now...',
       'FIRST LAUNCH needs you to accept its license and finish setup, and may reboot.')
     [void](Install-WithWinget -Id 'Docker.DockerDesktop' -TimeoutSec 1200)
@@ -221,13 +241,13 @@ function Invoke-PhaseEnvironmentPreflight {
     $result = Invoke-EnvironmentProbe
     if (Test-EnvironmentReady -Result $result) {
       $State.preflight = Get-PreflightCheckpoint -Result $result
-      Write-Card 'Phase 0 - Ready' @('Docker Desktop is installed and its local engine is healthy.')
+      Write-Card 'This PC is ready' @('Docker Desktop is installed and its local engine is healthy.')
       return
     }
     Stop-ForUserAction -Title 'Almost there' -Lines @(
       'Docker Desktop is installed but has not finished its own first-run setup.',
       'Next: open Docker Desktop from the Start menu, accept its terms and let it finish.',
-      'If it asks to restart Windows, restart. Then run the AFK AI installer again.',
+      'If it asks to restart Windows, restart. Then open AFK AI again.',
       'Your answers and setup progress are saved.'
     ) -Checkpoint (Get-PreflightCheckpoint -Result $result) -RebootReason 'docker-desktop-first-run'
   }
@@ -239,7 +259,7 @@ function Invoke-PhaseEnvironmentPreflight {
 }
 
 function Invoke-PhaseEnvironmentReady {
-  Write-Card 'Phase 0b - Environment gate' @(
+  Write-Card 'Environment gate' @(
     'Confirming the local Docker engine is still healthy before any setup work.')
   Assert-EnvironmentReady -Title 'AFK AI needs one thing first'
 }
@@ -275,12 +295,14 @@ function Invoke-PhaseVet {
     }
   }
 
+  $gpuLabel = if ($gpu) { $gpu } else { 'none detected' }
+  $vramLabel = if ($null -ne $vram) { $vram } else { '?' }
   $lines = @(
-    "GPU:  $($gpu ?? 'none detected')   VRAM: $($vram ?? '?') GB",
+    "GPU:  $gpuLabel   VRAM: $vramLabel GB",
     "RAM:  ${ramGb} GB   Cores: ${cores}   Free disk: ${diskGb} GB",
     "Tier: $($tier.id)  (context ceiling $($tier.ctx) tokens)"
   ) + @($warn | ForEach-Object { "! $_" })
-  Write-Card 'Phase 1 - Capability vet' $lines
+  Write-Card 'Hardware' $lines
 }
 
 function Read-IntentByKeypress {
@@ -290,7 +312,7 @@ function Read-IntentByKeypress {
   $extras = [ordered]@{ c = 'coding'; w = 'web'; v = 'voice' }
   $on = @{}
   foreach ($k in $extras.Keys) { $on[$k] = $false }
-  Write-Card 'Phase 2 - What do you want localai for?' @(
+  Write-Card 'What do you want AFK AI for?' @(
     'Chat is always included. Want extras? Press a key to toggle them:',
     '  [C] coding      [W] web browsing      [V] voice',
     'Then press Enter to continue (or just press Enter for chat only).')
@@ -324,51 +346,41 @@ function Invoke-PhaseIntent {
   if ($ignored) {
     $lines += "Ignored (not an option): $($ignored -join ', ')   - options are chat, coding, web, voice"
   }
-  Write-Card 'Phase 2 - Intent' $lines
+  Write-Card 'Intent' $lines
 }
 
-function Invoke-PhasePython {
-  Write-Card 'Phase 3a - Python 3.12' @('winget install Python.Python.3.12')
-  [void](Install-WithWinget -Id 'Python.Python.3.12')
-}
-
-function Invoke-PhasePip {
+function Invoke-PhaseRuntime {
+  <#
+    Prove AFK AI's own Python runtime before anything depends on it: isolated
+    from the PC's Python, the pinned version, and - for an installed build - the
+    exact files Setup shipped. Then create the runtime configuration (and move
+    an older setup's service secret out of the program folder).
+  #>
   [CmdletBinding(SupportsShouldProcess)]
   param()
-  Write-Card 'Phase 3b - Install localai (editable)' @('py -3.12 -m pip install -e .[windows]')
-  if ($PSCmdlet.ShouldProcess('.[windows]', 'pip install -e')) {
-    $py = Resolve-Python
-    if (-not $py) {
-      throw 'No working Python >=3.12 found (checked py -3.12, python.exe outside WindowsApps, and the winget default dir). Close this window and run "Install Local AI.cmd" again - a fresh window picks up the new PATH.'
-    }
-    Write-Host "   using interpreter: $($py -join ' ')" -ForegroundColor DarkGray
-    $pipArgs = (Get-PyRest -Py $py) + @('-m', 'pip', 'install', '-e', '.[windows]')
-    $r = Invoke-AiProcess -FilePath $py[0] -ArgumentList $pipArgs -TimeoutSec 900 -WorkingDirectory $RepoRoot
-    if ($r.Code -ne 0) {
-      $tail = (($r.Text -split "`r?`n") | Select-Object -Last 6) -join "`n"
-      throw "pip install failed (exit $($r.Code)) using '$($py -join ' ')':`n$tail"
-    }
+  Write-Card 'Preparing AFK AI' @('Checking AFK AI''s own runtime and configuration.')
+  if (-not $PSCmdlet.ShouldProcess('AFK AI runtime', 'verify and configure')) { return }
+  $info = Invoke-Engine -Arguments @('runtime-info') -TimeoutSec 120
+  $facts = $null
+  try { $facts = ($info.Text -split "`r?`n" | Where-Object { $_.TrimStart().StartsWith('{') } | Select-Object -Last 1) | ConvertFrom-Json } catch { $facts = $null }
+  if (-not $facts -or -not $facts.isolated -or -not $facts.site_disabled -or $facts.pinned_version -ne $facts.python_version) {
+    throw "AFK AI's own runtime could not be verified. Reinstall AFK AI to repair it; your chats and settings are kept. ($($info.Text))"
   }
+  if ($facts.installation.manifest_present -and -not $facts.installation.intact) {
+    throw "AFK AI's program files do not match this version ($($facts.installation.mismatched_count) changed, $($facts.installation.missing_count) missing, $($facts.installation.unexpected_count) unexpected). Reinstall AFK AI; your chats and settings are kept."
+  }
+  $configure = Invoke-Engine -Arguments @('configure') -TimeoutSec 120
+  if ($configure.Code -ne 0) { throw "AFK AI could not write its runtime configuration: $($configure.Text)" }
+  Write-Host "   Runtime: CPython $($facts.python_version), isolated." -ForegroundColor DarkGray
 }
 
 function Invoke-PhaseScout {
   [CmdletBinding(SupportsShouldProcess)]
   param()
-  $budget = $State.hardware.vram_gb
-  $budgetLabel = if ($null -ne $budget) { "$budget GB VRAM budget" } else { 'no VRAM (CPU-only)' }
-  Write-Card 'Phase 4 - Choose models' @(
-    "Running the scout at the vetted $budgetLabel, tier $($State.hardware.tier)")
-  if ($PSCmdlet.ShouldProcess('scout', 'run localai scout')) {
-    $scoutArgs = @('scout')
-    if ($null -ne $budget) { $scoutArgs += @('--vram-gb', "$budget") }
-    $out = Invoke-Localai -Arguments $scoutArgs -TimeoutSec 300
-    Write-Host $out.Text
-  }
   # Pick the model for the VETTED tier, not a fixed daily-driver: a 4 GB / CPU
   # box must NOT get the 9.5 GB qwen3.5:9b (it would spill or fail to load).
   # tiers.json carries a per-tier `pick` (source + ctx) proven to fit that tier's
-  # VRAM (test_each_tier_pick_fits_min_vram). Scout output above informs a manual
-  # override; parsing scout's grouped picks into state is a follow-up.
+  # VRAM (test_each_tier_pick_fits_min_vram).
   $tier = $Tiers.tiers | Where-Object { $_.id -eq $State.hardware.tier }
   $pick = $tier.pick
   $ctxK = [int]($pick.ctx / 1024)
@@ -376,12 +388,16 @@ function Invoke-PhaseScout {
   $State.models = [pscustomobject]@{
     chat = [pscustomobject]@{ tag = $tag; source = $pick.source; num_ctx = $pick.ctx }
   }
-  Write-Card 'Phase 4 - Picks' @(
-    "chat -> $tag   (source $($pick.source) @ $($pick.ctx) ctx, tier $($State.hardware.tier))")
+  if ($PSCmdlet.ShouldProcess($tag, 'record the chat model in runtime configuration')) {
+    $configure = Invoke-Engine -Arguments @('configure', '--model', $tag) -TimeoutSec 120
+    if ($configure.Code -ne 0) { throw "AFK AI could not record the chat model: $($configure.Text)" }
+  }
+  Write-Card 'Chat model' @(
+    "$tag   (from $($pick.source) with a $($pick.ctx)-token context, tier $($State.hardware.tier))")
 }
 
 function Invoke-PhaseOllamaDocker {
-  Write-Card 'Phase 5a - Ollama, Docker' @('winget install Ollama.Ollama; set Ollama host env')
+  Write-Card 'Model runtime' @('Installing Ollama if needed and applying its local settings.')
   [void](Install-WithWinget -Id 'Ollama.Ollama')
   # Load-bearing: Windows Ollama defaults to 127.0.0.1; Docker reaches it via
   # host.docker.internal, so we must bind 0.0.0.0 and set q8_0 KV (finding 1).
@@ -392,7 +408,7 @@ function Invoke-PhaseOllamaDocker {
     Add-OllamaUserOrigin -Origin $script:WebBrainOrigin
   }
 
-  # Docker readiness is now proved by the Phase 0 preflight and re-proved by the
+  # Docker readiness is proved by the environment preflight and re-proved by the
   # environment gate, both of which run before this phase. Reaching here with no
   # docker.exe means the machine changed underneath us mid-run, so hand it back
   # to the same live gate rather than starting a second install path.
@@ -404,96 +420,83 @@ function Invoke-PhaseOllamaDocker {
 function Invoke-PhasePulls {
   [CmdletBinding(SupportsShouldProcess)]
   param()
-  Write-Card 'Phase 5b - Pull models + aliases' @(
-    'ollama pull picks; build Modelfiles; localai model-aliases (needs Ollama running)')
-  # Last live check before the expensive download. The Friend Beta failure this
-  # unit exists to prevent was a multi-GB pull on a machine whose Docker engine
-  # could never start; a phase marked done earlier is not evidence of that.
+  Write-Card 'Downloading the chat model' @(
+    "$($State.models.chat.source) - this is the largest download and can take a while.")
+  # Last live check before the expensive download. The failure this gate exists
+  # to prevent was a multi-GB pull on a machine whose Docker engine could never
+  # start; a phase marked done earlier is not evidence of that.
   Assert-EnvironmentReady -Title 'AFK AI needs one thing first'
-  if ($PSCmdlet.ShouldProcess('models', 'ollama pull + create + aliases')) {
-    $ollama = Get-Command 'ollama.exe' -ErrorAction SilentlyContinue
-    if (-not $ollama) { throw 'ollama is not on PATH yet; close this window and run "Install Local AI.cmd" again.' }
+  if ($PSCmdlet.ShouldProcess('models', 'download, size the context, refresh aliases')) {
     if (-not (Start-OllamaServer)) {
-      throw 'Ollama did not become reachable at http://localhost:11434. Start Ollama from the Start menu, then run "Install Local AI.cmd" again.'
+      throw 'Ollama did not become reachable at http://localhost:11434. Start Ollama from the Start menu, then open AFK AI again.'
     }
-    # Invoke-AiProcess never throws, so a failed pull/create must be surfaced
-    # here or the phase is marked done with no model on the box.
-    $pull = Invoke-AiProcess -FilePath $ollama.Source -ArgumentList @('pull', $State.models.chat.source) -TimeoutSec 3600
+    $pull = Invoke-EngineStreaming -Arguments @(
+      'pull-model', '--source', $State.models.chat.source,
+      '--tag', $State.models.chat.tag, '--num-ctx', "$($State.models.chat.num_ctx)")
     if ($pull.Code -ne 0) {
-      $tail = (($pull.Text -split "`r?`n") | Select-Object -Last 4) -join ' | '
-      throw "ollama pull $($State.models.chat.source) failed (exit $($pull.Code)): $tail"
+      throw "The chat model $($State.models.chat.source) could not be downloaded (exit $($pull.Code))."
     }
-    # Build the picked model's Modelfile on the fly (FROM <source> + the tier's
-    # num_ctx) so every tier gets a right-sized context, not a fixed 32k file
-    # that would over-reserve KV on a smaller box. Written to TEMP; no dependency
-    # on a repo Modelfile that bakes 32k.
-    $mfName = 'localai-' + ($State.models.chat.tag -replace '[:\\/]', '-') + '.Modelfile'
-    $mfPath = Join-Path ([System.IO.Path]::GetTempPath()) $mfName
-    "FROM $($State.models.chat.source)`nPARAMETER num_ctx $($State.models.chat.num_ctx)" |
-      Set-Content -LiteralPath $mfPath -Encoding ascii
-    $create = Invoke-AiProcess -FilePath $ollama.Source -ArgumentList @('create', $State.models.chat.tag, '-f', $mfPath) -TimeoutSec 600 -WorkingDirectory $RepoRoot
-    if ($create.Code -ne 0) {
-      $tail = (($create.Text -split "`r?`n") | Select-Object -Last 4) -join ' | '
-      throw "ollama create $($State.models.chat.tag) failed (exit $($create.Code)): $tail"
-    }
-    # --lenient: a fresh box has only the picked model(s), not this repo's full
-    # zoo, so missing alias sources must be skipped, not fatal (finding 2).
-    [void](Invoke-Localai -Arguments @('model-aliases', '--lenient'))
+    # A fresh box has only the picked model(s), not a full model zoo, so
+    # missing alias sources are skipped rather than fatal (finding 2).
+    $aliases = Invoke-Engine -Arguments @('aliases') -TimeoutSec 300
+    if ($aliases.Code -ne 0) { Write-Host "   WARN: model aliases were not refreshed: $($aliases.Text)" -ForegroundColor Yellow }
   }
 }
 
 function Invoke-PhaseCompose {
   [CmdletBinding(SupportsShouldProcess)]
   param()
-  Write-Card 'Phase 5c - Compose up' @(
-    'point DEFAULT_MODELS at the pick; write .env (SEARXNG_SECRET); localai start')
-  if ($PSCmdlet.ShouldProcess('.env + stack', 'write .env and localai start')) {
-    # This repo's compose hardcodes the tier-A daily driver; rewrite it to the
-    # model we actually pulled so warm/health/model-scout AND Open WebUI's env all
-    # see the pick (finding 1), instead of forever warming a model a smaller box
-    # does not have. A silent failure here resurrects the bug, so surface it.
-    $setDefault = Invoke-Localai -Arguments @('set-default-model', '--model', $State.models.chat.tag)
-    if ($setDefault.Code -ne 0) {
-      throw "set-default-model $($State.models.chat.tag) failed (exit $($setDefault.Code)): $($setDefault.Text)"
+  Write-Card 'Starting AFK AI' @(
+    'Starting chat services, then checking that chat can really answer.')
+  if ($PSCmdlet.ShouldProcess('AFK AI services', 'start and qualify')) {
+    $start = Invoke-EngineStreaming -Arguments @('start')
+    if ($start.Code -ne 0) {
+      $reason = 'unknown'
+      try { $reason = ($start.Status | ConvertFrom-Json).message } catch { }
+      throw "AFK AI started but is not ready: $reason"
     }
-    $envPath = Join-Path $RepoRoot '.env'
-    if (-not (Test-Path -LiteralPath $envPath)) {
-      $secret = [Convert]::ToHexString([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(24))
-      "SEARXNG_SECRET=$secret" | Set-Content -LiteralPath $envPath -Encoding UTF8
-    }
-    [void](Invoke-Localai -Arguments @('start'))
   }
 }
 
 function Invoke-PhaseSeed {
   [CmdletBinding(SupportsShouldProcess)]
   param()
-  Write-Card 'Phase 5d - Seed Open WebUI DB' @(
-    "localai webui-seed --model $($State.models.chat.tag) --num-ctx $($State.models.chat.num_ctx)")
-  if ($PSCmdlet.ShouldProcess('open-webui DB', 'localai webui-seed')) {
-    [void](Invoke-Localai -Arguments @(
-        'webui-seed', '--model', $State.models.chat.tag,
-        '--num-ctx', "$($State.models.chat.num_ctx)",
-        '--default-model', $State.models.chat.tag))
+  Write-Card 'Tuning chat for this model' @("Applying $($State.models.chat.tag) defaults in Open WebUI.")
+  if ($PSCmdlet.ShouldProcess('open-webui DB', 'seed chat defaults')) {
+    $seed = Invoke-Engine -Arguments @(
+      'seed-webui', '--model', $State.models.chat.tag,
+      '--num-ctx', "$($State.models.chat.num_ctx)") -TimeoutSec 120
+    if ($seed.Code -ne 0) {
+      # Chat still works without these defaults; say so rather than failing setup.
+      Write-Host "   WARN: chat defaults were not applied ($($seed.Text))." -ForegroundColor Yellow
+    }
   }
 }
 
 function Invoke-PhaseSecure {
   [CmdletBinding(SupportsShouldProcess)]
   param()
-  Write-Card 'Phase 6 - Secure by default' @(
-    'ai-firewall -Apply (block physical-adapter ports); WinNAT :3000 fix if reserved',
-    'Loopback-only binds verified; NO LAN exposure; NO autostart registered')
-  if ($PSCmdlet.ShouldProcess('firewall', 'ai-firewall -Apply')) {
-    # ai-firewall exits 0 OK / 1 warnings / 2 failures; UAC decline or timeout
-    # must not silently pass as "secured".
-    $fw = Invoke-AiProcess -FilePath 'pwsh' -ArgumentList @(
+  Write-Card 'Secure by default' @(
+    'The model runtime listens on this PC''s network interfaces so the chat container can reach it.',
+    'Blocking AFK AI''s ports on physical networks - Windows will ask for administrator approval.')
+  if ($PSCmdlet.ShouldProcess('firewall', 'ai-firewall -Apply, then verify the AFK AI block rule')) {
+    # Runs on THIS PowerShell (inbox Windows PowerShell 5.1 when the app runs
+    # setup), never on an optional PowerShell 7. ai-firewall elevates itself.
+    $fw = Invoke-AiProcess -FilePath (Get-Process -Id $PID).Path -ArgumentList @(
         '-NoProfile', '-ExecutionPolicy', 'Bypass',
         '-File', (Join-Path $RepoRoot 'ai-firewall.ps1'), '-Apply') -TimeoutSec 300 -WorkingDirectory $RepoRoot
-    if ($fw.Code -gt 1) {
-      Write-Host '   WARN: firewall hardening did not complete (was the admin prompt declined?).' -ForegroundColor Yellow
-      Write-Host '   You can apply it any time with:  pwsh -File ai-firewall.ps1 -Apply' -ForegroundColor Yellow
+    # The exit code is not the evidence (a declined prompt, a timeout or a
+    # partial apply can all look alike). Read the rule back from Windows.
+    $adapters = @()
+    try { $adapters = @(Get-AfkPhysicalAdapterAliases) } catch { $adapters = @() }
+    $problems = @(Get-AfkFirewallRuleProblems -Rule (Get-AfkFirewallRuleEvidence) -PhysicalAdapters $adapters)
+    if ($problems.Count) {
+      throw ("AFK AI could not confirm the Windows Firewall rule that keeps its model runtime (port 11434) " +
+        "and chat ports off your local network: $($problems -join '; '). Until it is in place, other devices " +
+        "on your network may be able to reach the model runtime. Choose Repair and approve the Windows " +
+        "administrator prompt. (firewall tool exit $($fw.Code))")
     }
+    Write-Host '   Firewall: AFK AI ports are blocked on physical networks (rule verified).' -ForegroundColor DarkGray
   }
   # WinNAT's dynamic port pool sometimes reserves 3000 after a reboot, which
   # blocks Docker's 127.0.0.1:3000 publish. Detect it and explain the fix (it
@@ -510,7 +513,7 @@ function Invoke-PhaseSecure {
   if ($port3000Reserved) {
     Write-Card 'Port 3000 is reserved by Windows' @(
       'Windows (WinNAT) has reserved port 3000, which the chat UI needs.',
-      'Fix it from an Administrator PowerShell, then run "Install Local AI.cmd" again:',
+      'Fix it from an Administrator PowerShell, then open AFK AI again:',
       '  net stop winnat',
       '  netsh int ipv4 add excludedportrange protocol=tcp startport=3000 numberofports=1',
       '  net start winnat')
@@ -518,31 +521,29 @@ function Invoke-PhaseSecure {
 }
 
 function Invoke-PhaseSelfTest {
-  Write-Card 'Phase 7 - Self-test + hand off' @('localai health (must exit 0)')
+  Write-Card 'Final check' @('Asking AFK AI whether chat is really usable.')
   if ($DryRun) {
-    Write-Host '   [dry-run] would run: python -m localai health' -ForegroundColor DarkGray
-  } else {
-    $health = Invoke-Localai -Arguments @('health') -TimeoutSec 300
-    Write-Host $health.Text
-    if ($health.Code -ne 0) {
-      Write-Host 'Self-test did not pass. Read the lines above, then run "Install Local AI.cmd" again to retry.' -ForegroundColor Red
-      # Exit non-zero BEFORE the runner marks this phase done: a failed
-      # self-test must neither print "Finished" nor be skipped on the retry.
-      exit 1
-    }
+    Write-Host '   [dry-run] would run: status --json' -ForegroundColor DarkGray
+    return
   }
-  $ready = @(
-    'Chat:   http://127.0.0.1:3000        (first signup becomes admin)',
-    'Search: http://127.0.0.1:8080',
-    'Start / stop:  localai start  /  localai stop   (in any terminal)',
-    'Change model:  Open WebUI dropdown, or  localai warm --model <id>',
-    'Security: loopback-only, firewall-blocked on physical adapters, no autostart.')
+  $check = Invoke-Engine -Arguments @('status', '--json') -TimeoutSec 300
+  $status = $null
+  try { $status = ($check.Text -split "`r?`n" | Where-Object { $_.TrimStart().StartsWith('{') } | Select-Object -Last 1) | ConvertFrom-Json } catch { $status = $null }
+  if (-not $status -or $status.state -ne 'Ready') {
+    $message = if ($status) { $status.message } else { $check.Text }
+    Write-Host "AFK AI is not ready yet: $message" -ForegroundColor Red
+    # Exit non-zero BEFORE the runner marks this phase done: a failed
+    # self-test must neither print "Finished" nor be skipped on the retry.
+    exit 1
+  }
+  $ready = @('Chat is ready. Open AFK AI and choose Open Chat.')
+  if ($status.chat.onboarding_required) { $ready += 'The first account you create in chat becomes the owner of this PC''s chat.' }
+  $ready += 'Security: chat is served on this PC only; AFK AI ports are blocked on physical networks; no autostart.'
   if (@($State.intent) -contains 'web') {
     $ready += 'Browser agent: install WebBrain from the Chrome Web Store, set its server URL'
     $ready += '  to http://localhost:11434, and keep the Chrome window visible during tasks.'
-    $ready += '  Details + troubleshooting: docs/webbrain.md'
   }
-  Write-Card 'localai is ready' $ready
+  Write-Card 'AFK AI is ready' $ready
 }
 
 # ------------------------------------------------------- phase runner
@@ -551,8 +552,8 @@ function Invoke-PhaseSelfTest {
 # resume (Test-PhaseDone refuses to report them done), because the invariant this
 # flow exists to hold is:
 #
-#   no model pull and no product-specific Python/model setup begins until a LIVE
-#   gate has proved a usable local Docker path.
+#   no model pull and no product setup begins until a LIVE gate has proved a
+#   usable local Docker path.
 #
 # See docs/design/virtualization-docker-preflight.md.
 $Phases = @(
@@ -560,8 +561,7 @@ $Phases = @(
   @{ Name = 'environment-ready'; Run = { Invoke-PhaseEnvironmentReady } }
   @{ Name = 'vet';      Run = { Invoke-PhaseVet } }
   @{ Name = 'intent';   Run = { Invoke-PhaseIntent } }
-  @{ Name = 'python';   Run = { Invoke-PhasePython } }
-  @{ Name = 'pip';      Run = { Invoke-PhasePip } }
+  @{ Name = 'runtime';  Run = { Invoke-PhaseRuntime } }
   @{ Name = 'scout';    Run = { Invoke-PhaseScout } }
   @{ Name = 'ollama-docker'; Run = { Invoke-PhaseOllamaDocker } }
   @{ Name = 'pulls';    Run = { Invoke-PhasePulls } }
@@ -571,30 +571,27 @@ $Phases = @(
   @{ Name = 'self-test'; Run = { Invoke-PhaseSelfTest } }
 )
 
-# Preflight (review finding localai-43n): Python/Ollama/Docker all install via
-# winget, and a missing winget used to surface as three ignored yellow warnings
-# followed by a dead-end throw in Phase 3b. Fail fast, once, with the real fix -
-# unless every tool winget would install is already present.
+# Ollama and Docker Desktop install via winget. A missing winget used to surface
+# as ignored warnings followed by a dead-end throw. Fail fast, once, with the real
+# fix - unless every tool winget would install is already present.
 if (-not $DryRun -and -not (Get-Command 'winget.exe' -ErrorAction SilentlyContinue)) {
   Update-SessionPath
   $missing = @()
-  if (-not (Resolve-Python)) { $missing += 'Python 3.12' }
   if (-not (Get-Command 'ollama.exe' -ErrorAction SilentlyContinue)) { $missing += 'Ollama' }
   if (-not (Get-Command 'docker.exe' -ErrorAction SilentlyContinue)) { $missing += 'Docker Desktop' }
   if ($missing.Count) {
     throw @"
-winget is not available on this PC, and the installer needs it to install: $($missing -join ', ').
+winget is not available on this PC, and setup needs it to install: $($missing -join ', ').
 winget ships with Microsoft's App Installer - get it from https://aka.ms/getwinget
 (Windows Sandbox and LTSC editions do not include it by default).
-Or install the missing tools manually, then run "Install Local AI.cmd" again.
+Or install the missing tools manually, then open AFK AI again.
 "@
   }
 }
 
-Write-Card 'localai Friend Bootstrapper' @(
-  "Repo: $RepoRoot",
-  $(if ($DryRun) { 'DRY RUN - nothing will be changed.' } else { 'Live run.' }),
-  'Loopback-only, no autostart, no LAN exposure unless you opt in.')
+Write-Card 'AFK AI setup' @(
+  $(if ($DryRun) { 'DRY RUN - nothing will be changed.' } elseif ($Repair) { 'Repair: re-running product setup. Your chats and settings are kept.' } else { 'Setting up AFK AI on this PC.' }),
+  'Chat is served on this PC only. Setup blocks AFK AI ports on your local network and stops if it cannot. No autostart.')
 
 foreach ($phase in $Phases) {
   if (Test-PhaseDone -State $State -Phase $phase.Name) {

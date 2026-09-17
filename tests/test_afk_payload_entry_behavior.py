@@ -1,15 +1,25 @@
-"""The installed payload entry point must run THIS installation's own code.
+"""The installed engine entry point must run THIS installation's code on AFK's runtime.
 
-`py -m localai <command>` resolves through the ambient `localai` module name, so
-on a machine that also has the private engineering workbench installed editable
-it runs the workbench's code against the workbench's repository root. These tests
-drive installer/afk-payload.py as a real subprocess and prove it loads the
-payload it was pointed at - every one of them fails under ambient-name
-resolution, because the marker below only exists in the root under test.
+Two ambient-resolution failures shipped before these tests existed:
+
+- ``py -m localai <command>`` resolved the global ``localai`` name, so on a machine
+  with the private engineering workbench installed editable, Stop tore down the
+  workbench's stack and force-closed Docker Desktop and Ollama machine-wide.
+- ``py.exe -B afk-payload.py`` loaded the right package on whatever interpreter the
+  Python launcher chose, with that interpreter's site-packages and PYTHON*
+  environment in effect.
+
+These tests drive installer/afk-payload.py as a real subprocess. The fixture's
+``runtime/python`` is a directory link to the test interpreter's own directory, run
+with ``-I -S`` - the same isolation the embeddable CPython's ``._pth`` mode gives
+the shipped runtime - so no bypass switch exists or is needed.
 """
 
 from __future__ import annotations
 
+import json
+import os
+import platform
 import subprocess
 import sys
 from pathlib import Path
@@ -17,57 +27,80 @@ from pathlib import Path
 import pytest
 
 ENTRY = Path(__file__).resolve().parents[1] / "installer" / "afk-payload.py"
-
 MARKER = "STUB-PAYLOAD-MARKER"
+INTERPRETER_DIR = Path(sys.executable).resolve().parent
+COMMANDS = ("status", "start", "stop", "diagnostics")
 
-COMMANDS = ("stop", "start", "health")
-
-# An uninstall must never fail; Start/Health must never claim success for work
-# that did not happen.
-REFUSAL_EXIT = {"stop": 0, "start": 2, "health": 2}
-
-_STUB_MODULES = {
-    "afk_ownership.py": (
-        "def collect_afk_stop_report(*, program_root, **kwargs):\n"
-        f"    return 0, ['{MARKER} stop']\n"
-    ),
-    "start.py": (
-        "def collect_start_report(**kwargs):\n"
-        f"    return 0, ['{MARKER} start']\n"
-    ),
-    "health.py": (
-        "def collect_health_report(**kwargs):\n"
-        f"    return 0, ['{MARKER} health']\n"
-    ),
-}
+_STUB_CLI = (
+    "COMMANDS = " + repr(COMMANDS) + "\n"
+    "def main(argv):\n"
+    "    command = next(a for a in argv if a in COMMANDS)\n"
+    f"    print('{MARKER} ' + command)\n"
+    "    return 0\n"
+)
 
 
-def _stub_program_root(tmp_path: Path) -> Path:
-    """Build a program root whose payload is uniquely identifiable."""
-    program_root = tmp_path / "Programs" / "AFK LocalAI"
-    package = program_root / "src" / "localai"
-    package.mkdir(parents=True)
-    (package / "__init__.py").write_text("", encoding="utf-8")
-    for name, body in _STUB_MODULES.items():
-        (package / name).write_text(body, encoding="utf-8")
-    (program_root / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
+def _link_directory(link: Path, target: Path) -> None:
+    link.parent.mkdir(parents=True, exist_ok=True)
+    if sys.platform == "win32":
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        os.symlink(target, link, target_is_directory=True)
+
+
+def _program_root(
+    tmp_path: Path,
+    *,
+    runtime_target: Path | None = INTERPRETER_DIR,
+    pinned_version: str | None = None,
+    payload: bool = True,
+) -> Path:
+    program_root = tmp_path / "Programs" / "AFK AI"
+    program_root.mkdir(parents=True)
+    if payload:
+        package = program_root / "src" / "localai"
+        package.mkdir(parents=True)
+        (package / "__init__.py").write_text("", encoding="utf-8")
+        (package / "product_cli.py").write_text(_STUB_CLI, encoding="utf-8")
+    if runtime_target is not None:
+        _link_directory(program_root / "runtime" / "python", runtime_target)
+    if pinned_version != "":
+        identity = {
+            "implementation": "CPython",
+            "version": pinned_version or platform.python_version(),
+            "sha256": "0" * 64,
+            "source_url": "https://www.python.org/ftp/python/",
+        }
+        (program_root / "runtime").mkdir(parents=True, exist_ok=True)
+        (program_root / "runtime" / "afk-runtime.json").write_text(
+            json.dumps(identity), encoding="utf-8"
+        )
     return program_root
 
 
-def _run(command: str, program_root: Path | str) -> subprocess.CompletedProcess[str]:
+def _run(
+    program_root: Path,
+    *args: str,
+    isolated: bool = True,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    flags = ["-I", "-S", "-B"] if isolated else ["-B"]
     return subprocess.run(
         [
             sys.executable,
-            "-B",
+            *flags,
             str(ENTRY),
-            command,
             "--program-root",
             str(program_root),
+            *args,
         ],
         capture_output=True,
         text=True,
-        timeout=180,
+        timeout=120,
         check=False,
+        env=env,
     )
 
 
@@ -76,54 +109,114 @@ def test_entry_point_runs_the_payload_it_was_pointed_at(
     command: str, tmp_path: Path
 ) -> None:
     """The decisive check: ambient resolution cannot produce this marker."""
-    program_root = _stub_program_root(tmp_path)
+    program_root = _program_root(tmp_path)
 
-    result = _run(command, program_root)
+    result = _run(program_root, command)
 
     assert result.returncode == 0, result.stderr
     assert f"{MARKER} {command}" in result.stdout
 
 
-@pytest.mark.parametrize("command", COMMANDS)
-def test_entry_point_refuses_when_the_payload_is_missing(
-    command: str, tmp_path: Path
-) -> None:
-    empty = tmp_path / "no-payload"
-    empty.mkdir()
+def test_an_interpreter_outside_the_installation_is_refused(tmp_path: Path) -> None:
+    """``py.exe``, PATH Python or a venv: all are "not AFK's runtime"."""
+    elsewhere = tmp_path / "some-other-python"
+    elsewhere.mkdir()
+    program_root = _program_root(tmp_path, runtime_target=elsewhere)
 
-    result = _run(command, empty)
+    result = _run(program_root, "status", "--json")
 
-    assert result.returncode == REFUSAL_EXIT[command], result.stdout
-    assert "No AFK LocalAI payload found" in result.stderr
-    assert "Refusing to act" in result.stderr
+    assert result.returncode == 3
     assert MARKER not in result.stdout
+    assert "not AFK AI's own Python runtime" in result.stderr
+    status = json.loads(result.stdout.strip().splitlines()[-1])
+    assert status["state"] == "Failed"
+    assert status["reason"] == "RUNTIME_UNVERIFIED"
+    assert status["chat"] == {"ready": False, "url": None, "onboarding_required": None}
+    assert status["next_action"] == "repair"
+
+
+def test_the_runtime_must_be_isolated_from_the_pc_s_python_settings(
+    tmp_path: Path,
+) -> None:
+    program_root = _program_root(tmp_path)
+
+    result = _run(program_root, "status", isolated=False)
+
+    assert result.returncode == 3
+    assert MARKER not in result.stdout
+    assert "not isolated" in result.stderr
+
+
+def test_a_runtime_version_mismatch_is_an_incomplete_installation(
+    tmp_path: Path,
+) -> None:
+    """A half-applied update must not run new code on an old interpreter."""
+    program_root = _program_root(tmp_path, pinned_version="3.0.0")
+
+    result = _run(program_root, "start")
+
+    assert result.returncode == 3
+    assert MARKER not in result.stdout
+    assert "incomplete" in result.stderr
+
+
+def test_a_missing_runtime_identity_is_refused(tmp_path: Path) -> None:
+    program_root = _program_root(tmp_path, pinned_version="")
+
+    result = _run(program_root, "status")
+
+    assert result.returncode == 3
+    assert "identity" in result.stderr
+
+
+def test_entry_point_refuses_when_the_payload_is_missing(tmp_path: Path) -> None:
+    program_root = _program_root(tmp_path, payload=False)
+
+    result = _run(program_root, "start")
+
+    assert result.returncode == 3
+    assert "No AFK AI payload found" in result.stderr
+    assert "Refusing to act" in result.stderr
 
 
 def test_a_refused_uninstall_still_succeeds(tmp_path: Path) -> None:
-    """An uninstall must not fail because the payload was already gone."""
-    empty = tmp_path / "no-payload"
-    empty.mkdir()
+    """An uninstall must not fail because the runtime or payload was already gone."""
+    elsewhere = tmp_path / "gone"
+    elsewhere.mkdir()
+    program_root = _program_root(tmp_path, runtime_target=elsewhere, payload=False)
 
-    assert _run("stop", empty).returncode == 0
+    result = _run(program_root, "stop")
+
+    assert result.returncode == 0
+    assert "Refusing to act" in result.stderr
 
 
-@pytest.mark.parametrize("command", ("start", "health"))
-def test_a_refused_start_or_health_reports_failure(
-    command: str, tmp_path: Path
-) -> None:
-    """Reporting success for work that never happened would be a lie."""
-    empty = tmp_path / "no-payload"
-    empty.mkdir()
+def test_hostile_ambient_python_state_cannot_answer_the_import(tmp_path: Path) -> None:
+    """A ``localai`` on PYTHONPATH (e.g. an engineering checkout) is never loaded."""
+    program_root = _program_root(tmp_path)
+    hostile = tmp_path / "hostile"
+    (hostile / "localai").mkdir(parents=True)
+    (hostile / "localai" / "__init__.py").write_text(
+        "raise SystemExit('HOSTILE localai imported')\n", encoding="utf-8"
+    )
+    (hostile / "localai" / "product_cli.py").write_text(
+        "def main(argv):\n    print('HOSTILE')\n    return 0\n", encoding="utf-8"
+    )
+    env = dict(os.environ, PYTHONPATH=str(hostile), PYTHONSTARTUP=str(hostile))
 
-    assert _run(command, empty).returncode != 0
+    result = _run(program_root, "status", env=env)
+
+    assert result.returncode == 0, result.stderr
+    assert f"{MARKER} status" in result.stdout
+    assert "HOSTILE" not in result.stdout + result.stderr
 
 
 def test_unknown_commands_fail_closed(tmp_path: Path) -> None:
-    program_root = _stub_program_root(tmp_path)
+    program_root = _program_root(tmp_path)
 
-    result = _run("purge", program_root)
+    result = _run(program_root, "purge")
 
-    assert result.returncode != 0
+    assert result.returncode == 2
     assert "Usage:" in result.stderr
     assert MARKER not in result.stdout
 
@@ -132,9 +225,9 @@ def test_entry_point_writes_no_bytecode_into_the_installation(
     tmp_path: Path,
 ) -> None:
     """__pycache__ Setup never installed would survive the uninstall."""
-    program_root = _stub_program_root(tmp_path)
+    program_root = _program_root(tmp_path)
 
-    _run("stop", program_root)
+    _run(program_root, "stop")
 
-    assert not list(program_root.rglob("__pycache__"))
-    assert not list(program_root.rglob("*.pyc"))
+    assert not list((program_root / "src").rglob("__pycache__"))
+    assert not list((program_root / "src").rglob("*.pyc"))

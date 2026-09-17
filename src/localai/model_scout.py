@@ -17,7 +17,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from localai.ops import CommandResult, run_command
-from localai.paths import REPO_ROOT, repo_path
+from localai.paths import REPO_ROOT, compose_value, repo_path
 from localai.scout_categories import CATEGORIES, Category, category_by_id
 
 AUTHORS = ("unsloth", "bartowski", "lmstudio-community", "Qwen", "ggml-org")
@@ -607,7 +607,9 @@ def baseline_model() -> str:
     except OSError:
         return FALLBACK_BASELINE
     match = re.search(r"DEFAULT_MODELS=(\S+)", text)
-    return match.group(1).strip() if match else FALLBACK_BASELINE
+    if match is None:
+        return FALLBACK_BASELINE
+    return compose_value(match.group(1)) or FALLBACK_BASELINE
 
 
 @dataclass(frozen=True)

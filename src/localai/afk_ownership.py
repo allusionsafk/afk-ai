@@ -7,11 +7,16 @@ private engineering workbench installed editable it runs the *workbench's* code
 against the *workbench's* ``REPO_ROOT`` - and then force-closes Docker Desktop
 and Ollama for the whole machine.
 
-Ownership here is established by PATH, not by name. A container is AFK-owned
-only when Docker reports its ``com.docker.compose.project.config_files`` label
-as exactly the ``docker-compose.yml`` that this installation shipped inside its
-own program root. A project *name* is deliberately not sufficient: both the
-product and the private workbench can present a project called ``localai``.
+A container is AFK-owned only when Docker reports BOTH ownership keys:
+
+- its ``com.docker.compose.project.config_files`` label is exactly the
+  ``docker-compose.yml`` this installation shipped inside its own program root;
+  a project *name* alone is not sufficient, because another checkout can
+  declare the same one;
+- its ``com.docker.compose.project`` label is :data:`AFK_COMPOSE_PROJECT`. The
+  path alone is not sufficient either: the 0.1.7 release candidate shipped
+  ``name: localai`` from the same program folder, so its leftover containers
+  carry this installation's path under a different project.
 
 Anything this module cannot prove, it refuses to touch. It never force-closes
 Docker Desktop or Ollama, never unloads or removes models, never prunes Docker,
@@ -31,6 +36,11 @@ from localai.ops import CommandResult, run_command
 COMPOSE_FILENAME = "docker-compose.yml"
 CONFIG_FILES_LABEL = "com.docker.compose.project.config_files"
 PROJECT_LABEL = "com.docker.compose.project"
+
+# AFK LocalAI's one Compose project identity. Every AFK Compose invocation names
+# it explicitly, and ownership requires it; the shipped compose file declares
+# the same name (asserted by tests).
+AFK_COMPOSE_PROJECT = "afk-localai"
 
 _REFUSAL = "Refusing to stop shared, unrelated, or unproven resources."
 
@@ -98,6 +108,13 @@ def _same_path(left: str, right: str) -> bool:
     )
 
 
+def is_owned_container(config_files: str, project: str, compose_file: Path) -> bool:
+    """Both ownership keys: this installation's compose file AND the AFK project."""
+    return project == AFK_COMPOSE_PROJECT and _same_path(
+        config_files, str(compose_file)
+    )
+
+
 def _label_format() -> str:
     """Build the ``docker ps --format`` template for the ownership labels."""
     project = "{{.Label " + chr(34) + PROJECT_LABEL + chr(34) + "}}"
@@ -111,11 +128,11 @@ def discover_owned_stack(
     runner: CommandRunner = run_command,
     timeout_sec: int = 90,
 ) -> tuple[OwnedStack | None, str | None]:
-    """Find containers labelled with exactly ``compose_file``.
+    """Find containers labelled with exactly ``compose_file`` AND the AFK project.
 
     Returns ``(stack, None)`` when ownership is proven, ``(None, None)`` when
     nothing AFK-owned exists, and ``(None, reason)`` when ownership is
-    ambiguous or undecidable - in which case the caller must not act.
+    undecidable - in which case the caller must not act.
     """
     # Every container is listed and matched here rather than with a daemon-side
     # "--filter label=..." query: that filter's matching rules vary between
@@ -137,7 +154,6 @@ def discover_owned_stack(
     if result.code != 0:
         return None, "Docker is unavailable; ownership is undecidable."
 
-    projects: set[str] = set()
     containers: list[str] = []
     for line in result.stdout.splitlines():
         # Only newline noise is trimmed: a container with no compose labels
@@ -156,23 +172,18 @@ def discover_owned_stack(
         if not config_files or not project:
             # Not a compose container at all, so demonstrably not ours.
             continue
-        if not _same_path(config_files, str(compose_file)):
-            # Someone else's stack - the private workbench, or any other
-            # project sharing this machine. Left strictly alone.
+        if not is_owned_container(config_files, project, compose_file):
+            # Someone else's stack - the private workbench, another project
+            # sharing this machine, or an older AFK release's project left in
+            # the same program folder. Left strictly alone.
             continue
-        projects.add(project)
         containers.append(container_id)
 
     if not containers:
         return None, None
-    if len(projects) != 1:
-        return None, (
-            f"AFK-owned containers report conflicting project names: "
-            f"{sorted(projects)}."
-        )
     return (
         OwnedStack(
-            project=projects.pop(),
+            project=AFK_COMPOSE_PROJECT,
             compose_file=compose_file,
             container_ids=tuple(containers),
         ),
@@ -222,9 +233,8 @@ def collect_afk_stop_report(
     # targets from the project name and the service names in the file, and
     # ignores the config_files label entirely. Verified against a live daemon -
     # a compose stop scoped with one file stopped a container labelled as
-    # belonging to a different file. Since the shipped compose declares
-    # "name: localai", and the private workbench's compose declares the same,
-    # that is not hypothetical: proving ownership by label and then acting by
+    # belonging to a different file. Another checkout can declare the same
+    # project name, so proving ownership by both labels and then acting by
     # project name would hand execution to a weaker key than the proof.
     result = runner(
         [docker_executable(), "stop", *stack.container_ids],

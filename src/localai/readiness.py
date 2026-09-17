@@ -12,16 +12,28 @@ So READY here is a claim about the product, not about Windows:
       and its BACKEND answers (not just the static frontend)
       and Ollama answers
       and the configured model exists
+      and the chat backend itself can reach Ollama and see that model
       and a tiny generation actually completes
 
-Anything less is DEGRADED or STARTING, never READY. Every state carries a
-reason code and a human sentence, so the shell never has to invent either.
+Anything less is DEGRADED, STARTING, STOPPED or UNKNOWN, never READY. Every
+state carries a reason code, a human sentence and the next useful action, so the
+shell never has to invent any of them.
+
+Two observation modes exist because the evidence has very different costs:
+
+``qualify``
+    Everything above, including the tiny generation. Loads the model if it is
+    not already loaded. This is the only mode that can produce READY.
+
+``liveness``
+    Everything except the container-to-Ollama exec and the generation: one
+    ``docker ps`` and two loopback GETs. When all of that is healthy the state is
+    LIVE - "nothing observable has regressed" - which the shell may use to KEEP a
+    previous READY, but never to create one.
 
 One thing this deliberately does NOT claim: that a human has completed Open
-WebUI's first-run signup. A fresh install reports ``onboarding`` and chat is
-gated behind that account. Backend-and-inference readiness and human-chat
-readiness are reported as separate facts rather than collapsed into one
-optimistic "ready".
+WebUI's first-run signup. ``onboarding_required`` is reported as a separate fact;
+chat is still the right place to send someone who needs to create that account.
 """
 
 from __future__ import annotations
@@ -29,24 +41,32 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
 from localai.afk_ownership import (
+    AFK_COMPOSE_PROJECT,
     CONFIG_FILES_LABEL,
     PROJECT_LABEL,
     docker_executable,
+    is_owned_container,
     owned_compose_file,
 )
 from localai.ops import CommandResult, run_command
 
-# Product states. Ordered from least to most usable; the overall state is the
-# weakest state any required component is in.
+SCHEMA_VERSION = 2
+
+MODE_QUALIFY = "qualify"
+MODE_LIVENESS = "liveness"
+
+# Product states.
 STOPPED = "Stopped"
 STARTING = "Starting"
 DEGRADED = "Degraded"
+LIVE = "Live"
 READY = "Ready"
 FAILED = "Failed"
 NOT_INSTALLED = "NotInstalled"
@@ -59,8 +79,15 @@ SERVICE_READY = "Ready"
 SERVICE_DEGRADED = "Degraded"
 SERVICE_FAILED = "Failed"
 SERVICE_NOT_REQUIRED = "NotRequired"
+SERVICE_NOT_CHECKED = "NotChecked"
+
+# Inference qualification outcomes.
+INFERENCE_PASSED = "passed"
+INFERENCE_FAILED = "failed"
+INFERENCE_NOT_RUN = "not_run"
 
 WEBUI_URL = "http://127.0.0.1:3000"
+CHAT_URL = f"{WEBUI_URL}/"
 OLLAMA_URL = "http://127.0.0.1:11434"
 
 # Required for the product to be usable at all. Kokoro (speech) and SearXNG
@@ -68,6 +95,28 @@ OLLAMA_URL = "http://127.0.0.1:11434"
 # degrades rather than fails.
 REQUIRED_SERVICES = ("open-webui",)
 OPTIONAL_SERVICES = ("searxng", "kokoro")
+
+# The one next step the shell should offer for each reason. The shell renders
+# these as buttons from a fixed allowlist; it does not reinterpret the reason.
+NEXT_ACTION: dict[str, str] = {
+    "READY": "open_chat",
+    "LIVE": "check",
+    "PAYLOAD_NOT_FOUND": "repair",
+    "DOCKER_UNREACHABLE": "start",
+    "DOCKER_TIMEOUT": "check",
+    "NOT_STARTED": "start",
+    "FOREIGN_PROJECT_COLLISION": "diagnostics",
+    "WEBUI_NOT_RUNNING": "start",
+    "WEBUI_STARTING": "wait",
+    "WEBUI_BACKEND_UNAVAILABLE": "repair",
+    "WEBUI_DEGRADED": "repair",
+    "OLLAMA_UNAVAILABLE": "start",
+    "MODEL_NOT_CONFIGURED": "repair",
+    "MODEL_MISSING": "repair",
+    "BACKEND_CANNOT_REACH_OLLAMA": "diagnostics",
+    "INFERENCE_FAILED": "diagnostics",
+    "STATUS_ERROR": "diagnostics",
+}
 
 
 class CommandRunner(Protocol):
@@ -84,9 +133,12 @@ class CommandRunner(Protocol):
 
 
 class HttpProbe(Protocol):
-    """Returns (status_code, body) or raises."""
+    """Returns (status_code, body) or raises OSError."""
 
     def __call__(self, url: str, *, timeout_sec: float) -> tuple[int, str]: ...
+
+
+InferencePoster = Callable[..., tuple[int, str]]
 
 
 @dataclass(frozen=True)
@@ -101,30 +153,52 @@ class ProductStatus:
     """A snapshot the UI can render without making a second judgement."""
 
     state: str = UNKNOWN
-    reason: str = "UNKNOWN"
+    reason: str = "STATUS_ERROR"
     message: str = ""
+    mode: str = MODE_QUALIFY
     services: list[ServiceStatus] = field(default_factory=list)
     model: str | None = None
     chat_ready: bool = False
-    human_signup_complete: bool | None = None
+    onboarding_required: bool | None = None
+    inference: str = INFERENCE_NOT_RUN
+    inference_detail: str = ""
+    observed_at_utc: str = field(
+        default_factory=lambda: datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    )
+
+    @property
+    def next_action(self) -> str:
+        return NEXT_ACTION.get(self.reason, "diagnostics")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "observed_at_utc": self.observed_at_utc,
+            "mode": self.mode,
+            "state": self.state,
+            "reason": self.reason,
+            "message": self.message,
+            "next_action": self.next_action,
+            "chat": {
+                "ready": self.chat_ready,
+                # The URL is only handed out when chat is usable, so a caller
+                # cannot route someone into a known-broken page by accident.
+                "url": CHAT_URL if self.chat_ready else None,
+                "onboarding_required": self.onboarding_required,
+            },
+            "qualification": {
+                "inference": self.inference,
+                "detail": self.inference_detail,
+            },
+            "model": self.model,
+            "services": [
+                {"name": s.name, "state": s.state, "detail": s.detail}
+                for s in self.services
+            ],
+        }
 
     def to_json(self) -> str:
-        return json.dumps(
-            {
-                "schema_version": 1,
-                "state": self.state,
-                "reason": self.reason,
-                "message": self.message,
-                "chat_ready": self.chat_ready,
-                "human_signup_complete": self.human_signup_complete,
-                "model": self.model,
-                "services": [
-                    {"name": s.name, "state": s.state, "detail": s.detail}
-                    for s in self.services
-                ],
-            },
-            sort_keys=True,
-        )
+        return json.dumps(self.to_dict(), sort_keys=True)
 
 
 def http_get(url: str, *, timeout_sec: float = 5.0) -> tuple[int, str]:
@@ -155,10 +229,79 @@ def _post_json(
 
 @dataclass(frozen=True)
 class OwnedContainer:
+    container_id: str
     name: str
     service: str
     state: str
     health: str
+
+
+@dataclass(frozen=True)
+class Discovery:
+    owned: list[OwnedContainer]
+    foreign_same_project: int
+    problem: str | None
+    timed_out: bool = False
+
+
+def discover(
+    compose_file: Path,
+    *,
+    runner: CommandRunner = run_command,
+    timeout_sec: int = 30,
+) -> Discovery:
+    """List containers this installation owns.
+
+    Ownership is decided exactly the way the uninstall path decides it
+    (:func:`localai.afk_ownership.is_owned_container`): the compose config-file
+    label must be this installation's own compose file AND the project must be
+    AFK's. A project NAME alone is never sufficient - another checkout on the
+    same machine can claim the same one - and neither is the path: an older
+    release's project in the same program folder carries it too. Containers
+    that claim AFK's project from anywhere else are counted (never named):
+    compose would adopt them on ``up``, so their presence blocks a safe start.
+    """
+    template = (
+        '{{.ID}}\t{{.Label "com.docker.compose.service"}}\t{{.Names}}\t'
+        '{{.State}}\t{{.Status}}\t{{.Label "' + CONFIG_FILES_LABEL + '"}}\t'
+        '{{.Label "' + PROJECT_LABEL + '"}}'
+    )
+    result = runner(
+        [docker_executable(), "ps", "--all", "--no-trunc", "--format", template],
+        timeout_sec=timeout_sec,
+    )
+    if result.code == 124:
+        return Discovery([], 0, "Docker did not answer in time.", timed_out=True)
+    if result.code != 0:
+        return Discovery([], 0, "Docker is not reachable.")
+
+    owned: list[OwnedContainer] = []
+    foreign = 0
+    for line in result.stdout.splitlines():
+        row = line.rstrip("\r\n")
+        if not row.strip():
+            continue
+        fields = row.split("\t")
+        if len(fields) != 7:
+            continue
+        cid, service, name, state, status, config_files, row_project = (
+            f.strip() for f in fields
+        )
+        if not service or not config_files:
+            continue
+        if not is_owned_container(config_files, row_project, compose_file):
+            if row_project == AFK_COMPOSE_PROJECT:
+                foreign += 1
+            continue
+        health = "healthy" if "healthy" in status.lower() else ""
+        if "unhealthy" in status.lower():
+            health = "unhealthy"
+        owned.append(
+            OwnedContainer(
+                container_id=cid, name=name, service=service, state=state, health=health
+            )
+        )
+    return Discovery(owned, foreign, None)
 
 
 def discover_owned_services(
@@ -167,104 +310,66 @@ def discover_owned_services(
     runner: CommandRunner = run_command,
     timeout_sec: int = 30,
 ) -> tuple[list[OwnedContainer], str | None]:
-    """List containers this installation owns, by config-file path.
-
-    Ownership is decided exactly the way the uninstall path decides it: the
-    container's compose config-file label must be this installation's own
-    compose file. A project NAME is never sufficient - another checkout on the
-    same machine can claim the same one.
-    """
-    template = (
-        "{{.Label \"com.docker.compose.service\"}}\t{{.Names}}\t{{.State}}\t"
-        "{{.Status}}\t{{.Label \"" + CONFIG_FILES_LABEL + "\"}}\t"
-        "{{.Label \"" + PROJECT_LABEL + "\"}}"
-    )
-    result = runner(
-        [docker_executable(), "ps", "--all", "--format", template],
-        timeout_sec=timeout_sec,
-    )
-    if result.code == 124:
-        return [], "Docker did not answer in time."
-    if result.code != 0:
-        return [], "Docker is not reachable."
-
-    owned: list[OwnedContainer] = []
-    for line in result.stdout.splitlines():
-        row = line.rstrip("\r\n")
-        if not row.strip():
-            continue
-        fields = row.split("\t")
-        if len(fields) != 6:
-            continue
-        service, name, state, status, config_files, _project = (
-            f.strip() for f in fields
-        )
-        if not service or not config_files:
-            continue
-        if not _same_path(config_files, str(compose_file)):
-            continue
-        health = "healthy" if "healthy" in status.lower() else ""
-        if "unhealthy" in status.lower():
-            health = "unhealthy"
-        owned.append(
-            OwnedContainer(name=name, service=service, state=state, health=health)
-        )
-    return owned, None
+    """Backwards-compatible view of :func:`discover`."""
+    found = discover(compose_file, runner=runner, timeout_sec=timeout_sec)
+    return found.owned, found.problem
 
 
-def _same_path(left: str, right: str) -> bool:
-    import os
+@dataclass(frozen=True)
+class BackendProbe:
+    state: str
+    detail: str
+    onboarding_required: bool | None = None
 
-    return os.path.normcase(os.path.normpath(left)) == os.path.normcase(
-        os.path.normpath(right)
-    )
 
-
-def probe_webui_backend(
+def probe_backend(
     *, probe: HttpProbe = http_get, timeout_sec: float = 5.0
-) -> tuple[str, str]:
+) -> BackendProbe:
     """Ask the Open WebUI BACKEND a question the static frontend cannot answer.
 
     ``/health`` can be served while the API is broken, so the decisive check is
     ``/api/config``: that is the request the browser makes on load, and the one
     that returned 500 while the page still rendered - producing Open WebUI's
-    "unsupported method (frontend only)" screen.
+    "unsupported method (frontend only)" screen. The same response carries the
+    ``onboarding`` flag, so no second request is made for it.
     """
     try:
         status, body = probe(f"{WEBUI_URL}/api/config", timeout_sec=timeout_sec)
     except OSError as error:
-        return SERVICE_STARTING, f"backend not answering yet ({type(error).__name__})"
+        return BackendProbe(
+            SERVICE_STARTING, f"backend not answering yet ({type(error).__name__})"
+        )
     if status == 200:
         try:
             payload = json.loads(body)
         except json.JSONDecodeError:
-            return SERVICE_DEGRADED, "backend returned an unreadable configuration"
-        version = str(payload.get("version") or "unknown")
-        return SERVICE_READY, f"backend healthy (Open WebUI {version})"
+            return BackendProbe(
+                SERVICE_DEGRADED, "backend returned an unreadable configuration"
+            )
+        if not isinstance(payload, dict):
+            return BackendProbe(
+                SERVICE_DEGRADED, "backend returned an unexpected configuration"
+            )
+        version = str(payload.get("version") or "unknown")[:32]
+        onboarding = payload.get("onboarding")
+        return BackendProbe(
+            SERVICE_READY,
+            f"backend healthy (Open WebUI {version})",
+            onboarding if isinstance(onboarding, bool) else False,
+        )
     if status >= 500:
-        return (
+        return BackendProbe(
             SERVICE_FAILED,
             f"backend error HTTP {status}; the page would load but chat cannot work",
         )
-    return SERVICE_DEGRADED, f"backend answered HTTP {status}"
+    return BackendProbe(SERVICE_DEGRADED, f"backend answered HTTP {status}")
 
 
-def webui_onboarding_pending(
+def probe_webui_backend(
     *, probe: HttpProbe = http_get, timeout_sec: float = 5.0
-) -> bool | None:
-    """True when Open WebUI still needs its first human account."""
-    try:
-        status, body = probe(f"{WEBUI_URL}/api/config", timeout_sec=timeout_sec)
-    except OSError:
-        return None
-    if status != 200:
-        return None
-    try:
-        payload = json.loads(body)
-    except json.JSONDecodeError:
-        return None
-    onboarding = payload.get("onboarding")
-    return bool(onboarding) if isinstance(onboarding, bool) else None
+) -> tuple[str, str]:
+    result = probe_backend(probe=probe, timeout_sec=timeout_sec)
+    return result.state, result.detail
 
 
 def probe_ollama(
@@ -280,19 +385,69 @@ def probe_ollama(
         payload = json.loads(body)
     except json.JSONDecodeError:
         return SERVICE_DEGRADED, "unreadable model list", []
-    models = [
-        str(m.get("name"))
-        for m in payload.get("models", [])
-        if isinstance(m, dict) and m.get("name")
-    ]
-    return SERVICE_READY, f"{len(models)} model(s) available", models
+    rows = payload.get("models", []) if isinstance(payload, dict) else []
+    models = [str(m.get("name")) for m in rows if isinstance(m, dict) and m.get("name")]
+    return SERVICE_READY, "model runtime answering", models
+
+
+def model_present(model: str, models: Sequence[str]) -> bool:
+    return any(m == model or m == f"{model}:latest" for m in models)
+
+
+# Runs INSIDE this installation's Open WebUI container: can the chat backend
+# reach the model runtime the way chat will, and does it see the configured
+# model? Prints a single word, never the model inventory.
+_REACH_SNIPPET = (
+    "import json,sys,urllib.request\n"
+    "m=sys.argv[1]\n"
+    "try:\n"
+    " d=json.load(urllib.request.urlopen("
+    "'http://host.docker.internal:11434/api/tags',timeout=8))\n"
+    "except Exception as e:\n"
+    " print('unreachable');sys.exit(2)\n"
+    "n=[x.get('name','') for x in d.get('models',[]) if isinstance(x,dict)]\n"
+    "ok=any(v==m or v==m+':latest' for v in n)\n"
+    "print('visible' if ok else 'absent');sys.exit(0 if ok else 1)\n"
+)
+
+
+def probe_backend_reaches_model(
+    container_id: str,
+    model: str,
+    *,
+    runner: CommandRunner = run_command,
+    timeout_sec: int = 25,
+) -> tuple[bool, str]:
+    """Exec into the PROVEN container id - never a compose service name."""
+    result = runner(
+        [
+            docker_executable(),
+            "exec",
+            container_id,
+            "python",
+            "-c",
+            _REACH_SNIPPET,
+            model,
+        ],
+        timeout_sec=timeout_sec,
+    )
+    word = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
+    if result.code == 0 and word == "visible":
+        return True, "chat backend can reach the model"
+    if result.code == 124:
+        return False, "chat backend check timed out"
+    if word == "absent":
+        return False, "chat backend reaches Ollama but cannot see the model"
+    if word == "unreachable":
+        return False, "chat backend cannot reach Ollama"
+    return False, f"chat backend check failed (exit {result.code})"
 
 
 def probe_tiny_inference(
     model: str,
     *,
-    poster: Any = None,
-    timeout_sec: float = 60.0,
+    poster: InferencePoster | None = None,
+    timeout_sec: float = 90.0,
 ) -> tuple[bool, str]:
     """Generate a handful of tokens. This is what makes READY mean something."""
     post = poster or _post_json
@@ -315,6 +470,8 @@ def probe_tiny_inference(
         payload = json.loads(body)
     except json.JSONDecodeError:
         return False, "inference returned an unreadable response"
+    if not isinstance(payload, dict):
+        return False, "inference returned an unexpected response"
 
     # Success is "the model generated tokens", not "the model produced visible
     # prose". The shipped default is a thinking model: asked for 8 tokens it
@@ -322,15 +479,24 @@ def probe_tiny_inference(
     # text in "thinking". Requiring response text called a working runtime
     # broken - found by running this against the real machine, not in a fixture.
     generated = payload.get("eval_count")
-    tokens = int(generated) if isinstance(generated, int) else 0
+    tokens = generated if isinstance(generated, int) else 0
     if not payload.get("done") or tokens <= 0:
-        reason = str(payload.get("done_reason") or "no tokens generated")
+        reason = str(payload.get("done_reason") or "no tokens generated")[:40]
         return False, f"inference produced nothing ({reason})"
 
     text = str(payload.get("response", "")).strip()
     thinking = str(payload.get("thinking", "")).strip()
     shape = "text" if text else ("reasoning" if thinking else "tokens")
+    # Only the SHAPE of the answer is reported: the generated text itself is
+    # never copied into status or diagnostics.
     return True, f"inference ok ({tokens} tokens, {shape})"
+
+
+def _set(status: ProductStatus, state: str, reason: str, message: str) -> ProductStatus:
+    status.state = state
+    status.reason = reason
+    status.message = message
+    return status
 
 
 def collect_product_status(
@@ -339,59 +505,98 @@ def collect_product_status(
     configured_model: str | None = None,
     runner: CommandRunner = run_command,
     probe: HttpProbe = http_get,
-    inference: Any = None,
+    inference: InferencePoster | None = None,
     verify_inference: bool = True,
     timeout_sec: int = 30,
 ) -> ProductStatus:
     """One honest answer to "is my local AI usable right now?".
 
-    The overall state is the weakest state of anything chat depends on. It is
-    never allowed to be better than the Open WebUI backend's state, which is the
-    specific mistake that shipped: prerequisites green, process exited 0,
-    product unusable.
+    Any unexpected failure while observing becomes UNKNOWN - never a guess.
     """
-    status = ProductStatus()
+    mode = MODE_QUALIFY if verify_inference else MODE_LIVENESS
+    try:
+        return _collect(
+            program_root=program_root,
+            configured_model=configured_model,
+            runner=runner,
+            probe=probe,
+            inference=inference,
+            mode=mode,
+            timeout_sec=timeout_sec,
+        )
+    except Exception as error:  # noqa: BLE001 - an observer must not crash
+        status = ProductStatus(mode=mode, model=configured_model)
+        return _set(
+            status,
+            UNKNOWN,
+            "STATUS_ERROR",
+            f"AFK AI could not check its services ({type(error).__name__}).",
+        )
+
+
+def _collect(
+    *,
+    program_root: Path | str | None,
+    configured_model: str | None,
+    runner: CommandRunner,
+    probe: HttpProbe,
+    inference: InferencePoster | None,
+    mode: str,
+    timeout_sec: int,
+) -> ProductStatus:
+    status = ProductStatus(mode=mode, model=configured_model)
 
     compose_file = owned_compose_file(program_root)
     if compose_file is None:
-        status.state = NOT_INSTALLED
-        status.reason = "PAYLOAD_NOT_FOUND"
-        status.message = "AFK LocalAI's own files could not be found."
-        return status
+        return _set(
+            status,
+            NOT_INSTALLED,
+            "PAYLOAD_NOT_FOUND",
+            "AFK AI's own files could not be found. Reinstall AFK AI to repair it.",
+        )
 
-    containers, docker_problem = discover_owned_services(
-        compose_file, runner=runner, timeout_sec=timeout_sec
-    )
-    if docker_problem is not None:
-        status.state = STOPPED
-        status.reason = "DOCKER_UNREACHABLE"
-        status.message = f"Docker is not available. {docker_problem}"
-        status.services = [ServiceStatus("Docker", SERVICE_STOPPED, docker_problem)]
-        return status
-
+    found = discover(compose_file, runner=runner, timeout_sec=timeout_sec)
+    if found.problem is not None:
+        status.services = [ServiceStatus("Docker", SERVICE_STOPPED, found.problem)]
+        if found.timed_out:
+            return _set(
+                status,
+                UNKNOWN,
+                "DOCKER_TIMEOUT",
+                "Docker did not answer in time, so AFK AI cannot tell whether it "
+                "is running.",
+            )
+        return _set(
+            status,
+            STOPPED,
+            "DOCKER_UNREACHABLE",
+            "AFK AI is stopped: Docker Desktop is not running.",
+        )
     status.services.append(ServiceStatus("Docker", SERVICE_READY, "engine reachable"))
 
-    by_service = {c.service: c for c in containers}
+    if found.foreign_same_project:
+        return _set(
+            status,
+            FAILED,
+            "FOREIGN_PROJECT_COLLISION",
+            "Another Docker project on this PC uses AFK AI's project name. AFK AI "
+            "will not start or change it. Open Diagnostics for details.",
+        )
+
+    by_service = {c.service: c for c in found.owned}
     if not by_service:
-        status.state = STOPPED
-        status.reason = "NOT_STARTED"
-        status.message = "AFK LocalAI is not running yet."
         for name in REQUIRED_SERVICES + OPTIONAL_SERVICES:
             status.services.append(ServiceStatus(name, SERVICE_STOPPED, "not created"))
-        return status
+        return _set(status, STOPPED, "NOT_STARTED", "AFK AI is stopped.")
 
     # --- Open WebUI: container first, then the backend behind it.
     webui = by_service.get("open-webui")
-    backend_state = SERVICE_STOPPED
-    backend_detail = "not created"
-    if webui is None:
-        backend_detail = "container missing"
-    elif webui.state != "running":
-        backend_state = SERVICE_STOPPED
-        backend_detail = f"container {webui.state}"
-    else:
-        backend_state, backend_detail = probe_webui_backend(probe=probe)
-    status.services.append(ServiceStatus("Open WebUI", backend_state, backend_detail))
+    backend = BackendProbe(SERVICE_STOPPED, "container missing")
+    if webui is not None and webui.state != "running":
+        backend = BackendProbe(SERVICE_STOPPED, f"container {webui.state}")
+    elif webui is not None:
+        backend = probe_backend(probe=probe)
+    status.services.append(ServiceStatus("Open WebUI", backend.state, backend.detail))
 
     for name in OPTIONAL_SERVICES:
         container = by_service.get(name)
@@ -407,81 +612,107 @@ def collect_product_status(
             ServiceStatus(name, service_state, f"container {container.state}")
         )
 
+    if backend.state == SERVICE_FAILED:
+        return _set(
+            status,
+            DEGRADED,
+            "WEBUI_BACKEND_UNAVAILABLE",
+            "Chat is running but its backend is not answering, so chat will not "
+            "work yet.",
+        )
+    if backend.state == SERVICE_STARTING:
+        return _set(status, STARTING, "WEBUI_STARTING", "AFK AI is starting chat.")
+    if backend.state == SERVICE_STOPPED:
+        return _set(status, STOPPED, "WEBUI_NOT_RUNNING", "AFK AI's chat is stopped.")
+    if backend.state != SERVICE_READY:
+        return _set(
+            status,
+            DEGRADED,
+            "WEBUI_DEGRADED",
+            f"Chat is not fully healthy: {backend.detail}.",
+        )
+    status.onboarding_required = backend.onboarding_required
+
     # --- Ollama and the model.
     ollama_state, ollama_detail, models = probe_ollama(probe=probe)
     status.services.append(ServiceStatus("Ollama", ollama_state, ollama_detail))
+    if ollama_state != SERVICE_READY:
+        return _set(
+            status,
+            DEGRADED,
+            "OLLAMA_UNAVAILABLE",
+            "The model runtime (Ollama) is not running.",
+        )
 
     model = configured_model
-    status.model = model
-    model_state = SERVICE_NOT_REQUIRED
-    model_detail = "no model configured"
-    model_present = False
-    if model:
-        model_present = any(m == model or m.startswith(f"{model}:") for m in models)
-        model_state = SERVICE_READY if model_present else SERVICE_DEGRADED
-        model_detail = "available" if model_present else f"{model} not pulled yet"
-    status.services.append(ServiceStatus("Model", model_state, model_detail))
-
-    # --- The decisive verdict.
-    if backend_state == SERVICE_FAILED:
-        status.state = DEGRADED
-        status.reason = "WEBUI_BACKEND_UNAVAILABLE"
-        status.message = (
-            "Open WebUI is running but its backend is not answering, so chat "
-            "will not work yet."
-        )
-        return status
-    if backend_state in (SERVICE_STARTING, SERVICE_STOPPED):
-        status.state = STARTING if backend_state == SERVICE_STARTING else STOPPED
-        status.reason = "WEBUI_NOT_READY"
-        status.message = (
-            "Open WebUI is still starting."
-            if backend_state == SERVICE_STARTING
-            else "Open WebUI is not running."
-        )
-        return status
-    if backend_state != SERVICE_READY:
-        status.state = DEGRADED
-        status.reason = "WEBUI_DEGRADED"
-        status.message = f"Open WebUI is not fully healthy: {backend_detail}."
-        return status
-
-    if ollama_state != SERVICE_READY:
-        status.state = DEGRADED
-        status.reason = "OLLAMA_UNAVAILABLE"
-        status.message = f"The model runtime is not available: {ollama_detail}."
-        return status
-
-    if model and not model_present:
-        status.state = DEGRADED
-        status.reason = "MODEL_MISSING"
-        status.message = f"The configured model {model} has not been downloaded yet."
-        return status
-
-    if verify_inference and model:
-        ok, inference_detail = probe_tiny_inference(model, poster=inference)
-        if not ok:
-            status.state = DEGRADED
-            status.reason = "INFERENCE_FAILED"
-            status.message = (
-                f"The model did not answer a test prompt: {inference_detail}."
-            )
-            return status
+    if not model:
         status.services.append(
-            ServiceStatus("Inference", SERVICE_READY, inference_detail)
+            ServiceStatus("Model", SERVICE_DEGRADED, "no model configured")
         )
+        return _set(
+            status,
+            DEGRADED,
+            "MODEL_NOT_CONFIGURED",
+            "No chat model is configured yet. Run setup to choose one.",
+        )
+    if not model_present(model, models):
+        status.services.append(
+            ServiceStatus("Model", SERVICE_DEGRADED, "not downloaded")
+        )
+        return _set(
+            status,
+            DEGRADED,
+            "MODEL_MISSING",
+            f"The chat model {model} has not been downloaded yet.",
+        )
+    status.services.append(ServiceStatus("Model", SERVICE_READY, "available"))
 
-    status.state = READY
-    status.reason = "READY"
-    status.chat_ready = True
-    pending = webui_onboarding_pending(probe=probe)
-    status.human_signup_complete = None if pending is None else (not pending)
-    status.message = (
-        "Your local AI is ready."
-        if status.human_signup_complete is not False
-        else (
-            "Your local AI is ready. Open WebUI will ask you to create a "
-            "local account."
+    if mode == MODE_LIVENESS:
+        status.services.append(
+            ServiceStatus("Inference", SERVICE_NOT_CHECKED, "not run in liveness mode")
+        )
+        return _set(status, LIVE, "LIVE", "AFK AI is running.")
+
+    assert webui is not None  # backend READY implies a running container
+    reachable, reach_detail = probe_backend_reaches_model(
+        webui.container_id, model, runner=runner
+    )
+    status.services.append(
+        ServiceStatus(
+            "Chat to model",
+            SERVICE_READY if reachable else SERVICE_FAILED,
+            reach_detail,
         )
     )
-    return status
+    if not reachable:
+        return _set(
+            status,
+            DEGRADED,
+            "BACKEND_CANNOT_REACH_OLLAMA",
+            "Chat is running but cannot reach the model runtime, so it would have "
+            "no model to answer with.",
+        )
+
+    ok, inference_detail = probe_tiny_inference(model, poster=inference)
+    status.inference = INFERENCE_PASSED if ok else INFERENCE_FAILED
+    status.inference_detail = inference_detail
+    status.services.append(
+        ServiceStatus(
+            "Inference", SERVICE_READY if ok else SERVICE_FAILED, inference_detail
+        )
+    )
+    if not ok:
+        return _set(
+            status,
+            DEGRADED,
+            "INFERENCE_FAILED",
+            "The model did not answer a short test prompt.",
+        )
+
+    status.chat_ready = True
+    message = "Your local AI is ready."
+    if status.onboarding_required:
+        message = (
+            "Your local AI is ready. Open Chat to create the local account for this PC."
+        )
+    return _set(status, READY, "READY", message)

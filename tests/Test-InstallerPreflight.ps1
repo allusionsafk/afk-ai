@@ -700,7 +700,10 @@ $idx = @{}
 for ($i = 0; $i -lt $phaseNames.Count; $i++) { $idx[$phaseNames[$i]] = $i }
 
 Assert-Equal -Case 'environment-preflight is the first phase' -Expected 'environment-preflight' -Actual $phaseNames[0]
-foreach ($later in @('python', 'pip', 'scout', 'pulls', 'compose')) {
+# The former "python" and "pip" phases installed Python machine-wide and
+# pip-installed the product into it. The product now carries its own runtime;
+# "runtime" verifies it, and is held to the same ordering invariant.
+foreach ($later in @('runtime', 'scout', 'pulls', 'compose')) {
     Assert-True -Case "environment-preflight runs before $later" `
         -Condition ($idx.ContainsKey($later) -and $idx['environment-preflight'] -lt $idx[$later]) `
         -Detail ($phaseNames -join ' -> ')
@@ -708,8 +711,11 @@ foreach ($later in @('python', 'pip', 'scout', 'pulls', 'compose')) {
 Assert-True -Case 'environment-ready gates the model pull' `
     -Condition ($idx.ContainsKey('environment-ready') -and $idx.ContainsKey('pulls') -and
                 $idx['environment-ready'] -lt $idx['pulls']) -Detail ($phaseNames -join ' -> ')
-Assert-True -Case 'environment-ready runs before the Python product setup' `
-    -Condition ($idx['environment-ready'] -lt $idx['python']) -Detail ($phaseNames -join ' -> ')
+Assert-True -Case 'environment-ready runs before the product runtime setup' `
+    -Condition ($idx.ContainsKey('runtime') -and $idx['environment-ready'] -lt $idx['runtime']) -Detail ($phaseNames -join ' -> ')
+Assert-True -Case 'setup no longer installs Python or packages into the PC''s own Python' `
+    -Condition (-not ($phaseNames -contains 'python') -and -not ($phaseNames -contains 'pip') -and
+                $src -notmatch '(?i)pip[''"]?\s*,?\s*[''"]?install|Python\.Python\.|[''"]-m[''"]\s*,\s*[''"]localai|Resolve-Python\b')
 
 # The planned action-required exit must stay 10: already-distributed pinned
 # copies of "Install Local AI.cmd" treat >=11 as an unexpected failure.
