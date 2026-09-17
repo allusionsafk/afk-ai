@@ -69,6 +69,8 @@ $evidence = [ordered]@{
   self_test_passed = $false
   owned_runtime_verified = $false
   stale_program_files_removed = $false
+  foreign_directory_refused = $false
+  foreign_directory_preserved = $false
   uninstall_entry_present = $false
   start_menu_present = $false
   uninstaller_exit_zero = $false
@@ -77,7 +79,35 @@ $evidence = [ordered]@{
 }
 $failure = $null
 $uninstaller = Join-Path $installRoot 'unins000.exe'
+# An existing folder that is NOT an AFK installation, chosen as the install
+# folder. Setup replaces runtime/src/installer/logs wholesale in folders it owns;
+# here every one of them is the user's and must survive untouched.
+$foreignRoot = Join-Path $disposable 'existing-user-folder'
+$foreignUninstaller = Join-Path $foreignRoot 'unins000.exe'
+$foreignFiles = [ordered]@{}
+foreach ($name in @('src', 'logs', 'runtime', 'installer')) {
+  $foreignFiles[(Join-Path $foreignRoot "$name/user-file.txt")] = "the user's own $name file"
+}
+$foreignFiles[(Join-Path $foreignRoot 'notes.txt')] = 'the user''s own top-level file'
 try {
+  foreach ($entry in $foreignFiles.GetEnumerator()) {
+    [void](New-Item -ItemType Directory -Path (Split-Path -Parent $entry.Key) -Force)
+    [IO.File]::WriteAllText($entry.Key, $entry.Value)
+  }
+  $foreignAttempt = Invoke-BoundedProcess -FilePath $candidate -Arguments @(
+    '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/NOCANCEL', '/TASKS=', ('/DIR=' + $foreignRoot)
+  ) -TimeoutSeconds 900
+  $evidence.foreign_directory_refused = $foreignAttempt.ExitCode -ne 0 -and
+    -not (Test-Path -LiteralPath (Join-Path $foreignRoot 'AFKLocalAI.exe')) -and
+    -not (Test-Path -LiteralPath $foreignUninstaller) -and
+    -not (Test-Path -LiteralPath $uninstallKey)
+  $evidence.foreign_directory_preserved = -not @($foreignFiles.GetEnumerator() | Where-Object {
+    -not (Test-Path -LiteralPath $_.Key -PathType Leaf) -or [IO.File]::ReadAllText($_.Key) -ne $_.Value
+  }).Count
+  if (-not ($evidence.foreign_directory_refused -and $evidence.foreign_directory_preserved)) {
+    throw "Setup did not refuse an existing non-AFK folder (exit $($foreignAttempt.ExitCode))."
+  }
+
   $predecessorInstall = Invoke-BoundedProcess -FilePath $predecessor -Arguments @(
     '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/NOCANCEL', '/TASKS='
   ) -TimeoutSeconds 900
@@ -132,6 +162,9 @@ try {
 } catch {
   $failure = $_.Exception.Message
 } finally {
+  if (Test-Path -LiteralPath $foreignUninstaller -PathType Leaf) {
+    try { [void](Invoke-BoundedProcess -FilePath $foreignUninstaller -Arguments @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -TimeoutSeconds 600) } catch {}
+  }
   if ((Test-Path -LiteralPath $uninstaller -PathType Leaf) -and (Test-Path -LiteralPath $installRoot)) {
     try { [void](Invoke-BoundedProcess -FilePath $uninstaller -Arguments @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -TimeoutSeconds 600) } catch {}
   }

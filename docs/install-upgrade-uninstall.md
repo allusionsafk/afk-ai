@@ -65,6 +65,12 @@ directory and shortcut choices, and replaces application files in place. The
 `runtime`, `src` and `installer` folders are replaced wholesale, so a file an
 older version shipped cannot linger beside the new one.
 
+That cleanup only ever happens in a folder AFK LocalAI owns: an empty or new
+folder, or the folder this AFK LocalAI installation is registered in (and which
+still holds its files). If you choose an existing folder that already contains
+other files, Setup refuses it before changing anything and asks for an empty or
+new folder instead. The folder's name is never taken as proof.
+
 The upgrade does not delete `%LOCALAPPDATA%\AFK LocalAI`. When the new shell
 opens, it verifies its own files and asks the engine for live status before
 showing anything as ready. Corrupt provisioning state is quarantined beside the

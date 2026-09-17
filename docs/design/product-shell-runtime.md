@@ -189,7 +189,7 @@ The shell verifies integrity once per launch on a background task.
 
 | Category | Examples | Repair | Update | Uninstall |
 |---|---|---|---|---|
-| Product runtime | `AFKLocalAI.exe`, `runtime\`, `src\`, `installer\`, compose template, Modelfiles | re-verified; reinstall replaces | replaced wholesale (`[InstallDelete]` for `runtime`, `src`, `installer`) | removed |
+| Product runtime | `AFKLocalAI.exe`, `runtime\`, `src\`, `installer\`, compose template, Modelfiles | re-verified; reinstall replaces | replaced wholesale (`[InstallDelete]` for `runtime`, `src`, `installer`), only in a folder AFK owns (new/empty, or this AppId's registered folder holding its files); any other non-empty folder is refused before changes | removed |
 | AFK-owned state | `%LOCALAPPDATA%\AFK LocalAI\State`, `Config\runtime.env` (chosen model, generated service secret), `Logs`, `Diagnostics` | kept | kept | kept |
 | User data | AFK's Docker volumes (`afk-localai_open-webui`: accounts, chats, documents; `afk-localai_searxng-data`) | kept | kept | kept |
 | External shared dependency | Windows features, WSL, Docker Desktop, Ollama and its model store, the user's `OLLAMA_*` variables | not changed by repair | not changed | not removed or stopped globally |
@@ -276,6 +276,6 @@ verification before the bind can be narrowed.
 | Corrupt, missing and stale files detected | Python and native integrity tests; live tamper probe |
 | Start never opens a browser; refuses foreign collisions | `tests/test_product_engine_behavior.py` |
 | Diagnostics privacy | `tests/test_diagnostics_privacy_behavior.py` |
-| Upgrade removes stale runtime files; uninstall leaves nothing in the program folder; state preserved | `scripts/Test-LifecycleUpgrade.ps1` (certified locally on real installer bytes) |
+| Upgrade removes stale runtime files; an existing non-AFK folder is refused and left intact; uninstall leaves nothing in the program folder; state preserved | `scripts/Test-LifecycleUpgrade.ps1` (certified locally on real installer bytes); `tests/Test-InstallerContracts.ps1` |
 | Ollama exposure only with a verified block rule; no unverified loopback claims | `tests/Test-InstallerFirewall.ps1` (runs on Windows PowerShell 5.1) |
 | Launcher verifies before executing | `tests/test_launcher_integrity_behavior.py` (runs the launcher's own verification against tampered bytes) |

@@ -346,6 +346,42 @@ if (Test-Path -LiteralPath $issPath) {
   Assert-True 'uninstall removes legacy program-folder leftovers only inside {app}' (
     $issText -match '(?s)\[UninstallDelete\].*\{app\}\\logs' -and
     $issText -notmatch '(?s)\[UninstallDelete\].*(localappdata|userappdata|\{%)')
+
+  # Adversarial review of PR #24 reproduced data loss: pointed at an existing
+  # folder of the user's, Setup deleted its runtime/src/installer/logs folders.
+  # Destructive cleanup is allowed only in a folder AFK provably owns.
+  $installDelete = [regex]::Match($issText, '(?ms)^\[InstallDelete\][ \t]*$(.*?)(?=^\[)').Groups[1].Value
+  $deleteEntries = @($installDelete -split "`r?`n" | Where-Object { $_ -match '^\s*Type:' })
+  Assert-True 'install cleanup has entries to guard' ($deleteEntries.Count -ge 4)
+  Assert-True 'every install cleanup entry requires AFK ownership of the folder' (
+    -not @($deleteEntries | Where-Object { $_ -notmatch ';\s*Check:\s*AppDirIsOwned\s*$' }).Count) ($deleteEntries -join ' | ')
+  $code = [regex]::Match($issText, '(?ms)^\[Code\][ \t]*$(.*?)(?=^\[)').Groups[1].Value
+  $ownedFn = [regex]::Match($code, '(?s)function IsAfkOwnedDir.*?\bend;\s*\r?\n\r?\n').Value
+  $registeredFn = [regex]::Match($code, '(?s)function IsRegisteredAfkInstallation.*?\bend;\s*\r?\n\r?\n').Value
+  Assert-True 'ownership is the registered installation of THIS AppId at THIS folder, plus an AFK artifact' (
+    $registeredFn -match [regex]::Escape('RegQueryStringValue(HKA,') -and
+    $registeredFn -match [regex]::Escape('{#SetupSetting("AppId")}') -and
+    $registeredFn -match [regex]::Escape("'Inno Setup: App Path'") -and
+    $registeredFn -match 'SamePath\(Registered, Dir\)' -and
+    $registeredFn -match "AFKLocalAI\.exe")
+  Assert-True 'a folder name is never ownership evidence' (
+    $ownedFn -and $ownedFn -notmatch '(?i)AFK LocalAI|ExtractFileName|Pos\(' -and
+    $registeredFn -notmatch '(?i)AFK LocalAI''|ExtractFileName|Pos\(')
+  Assert-True 'a non-empty foreign folder is refused before anything changes' (
+    $code -match '(?s)function PrepareToInstall.*?IsAfkOwnedDir\(ExpandConstant\(''\{app\}''\)\).*?ForeignDirMessage' -and
+    $code -match '(?s)function AppDirIsOwned.*?OwnershipDecided and OwnedDir')
+  Assert-True 'the folder picker refuses a foreign folder too' (
+    $code -match '(?s)function NextButtonClick.*?wpSelectDir.*?IsAfkOwnedDir\(WizardDirValue\)')
+}
+$upgradePath = Require-File 'scripts/Test-LifecycleUpgrade.ps1'
+if (Test-Path -LiteralPath $upgradePath) {
+  $upgradeText = Get-ContractText -Path $upgradePath
+  Assert-True 'upgrade qualification proves a foreign folder is refused and preserved' (
+    $upgradeText -match 'foreign_directory_refused = \$false' -and
+    $upgradeText -match 'foreign_directory_preserved = \$false' -and
+    $upgradeText -match [regex]::Escape("('/DIR=' + `$foreignRoot)"))
+  Assert-True 'upgrade qualification still proves stale owned files are removed' (
+    $upgradeText -match 'stale_program_files_removed = -not')
 }
 $orchestratorPath = Require-File 'installer/Install-LocalAI.ps1'
 if (Test-Path -LiteralPath $orchestratorPath) {
