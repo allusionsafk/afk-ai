@@ -67,6 +67,8 @@ $evidence = [ordered]@{
   executable_present = $false
   version_matches = $false
   self_test_passed = $false
+  owned_runtime_verified = $false
+  stale_program_files_removed = $false
   uninstall_entry_present = $false
   start_menu_present = $false
   uninstaller_exit_zero = $false
@@ -86,6 +88,23 @@ try {
   [void](New-Item -ItemType Directory -Path $stateRoot -Force)
   [IO.File]::WriteAllText($sentinel, 'preserve-me-across-upgrade')
 
+  # Files an older version shipped and the candidate does not - a module that
+  # would stay importable, a DLL beside the new interpreter, a retired script -
+  # plus what the pre-runtime provisioning left in the program folder. Setup
+  # never removes files it does not install unless told to, so each of these
+  # would otherwise survive the upgrade and keep the folder alive after uninstall.
+  $staleFiles = @(
+    (Join-Path $installRoot 'src/localai/removed_in_candidate.py'),
+    (Join-Path $installRoot 'runtime/python/python313.dll'),
+    (Join-Path $installRoot 'installer/retired-helper.ps1'),
+    (Join-Path $installRoot 'logs/model-scout-log.md')
+  )
+  foreach ($stale in $staleFiles) {
+    [void](New-Item -ItemType Directory -Path (Split-Path -Parent $stale) -Force)
+    [IO.File]::WriteAllText($stale, 'left by an older version')
+  }
+  [IO.File]::WriteAllText((Join-Path $installRoot '.env'), 'SEARXNG_SECRET=legacy-value')
+
   $candidateInstall = Invoke-BoundedProcess -FilePath $candidate -Arguments @(
     '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/NOCANCEL', '/TASKS='
   ) -TimeoutSeconds 900
@@ -101,6 +120,8 @@ try {
   $evidence.self_test_passed = $selfTest.ExitCode -eq 0 -and [bool]$summary.success
   $evidence.state_preserved = (Test-Path -LiteralPath $sentinel -PathType Leaf) -and
     ([IO.File]::ReadAllText($sentinel) -eq 'preserve-me-across-upgrade')
+  $evidence.stale_program_files_removed = -not @($staleFiles | Where-Object { Test-Path -LiteralPath $_ }).Count
+  $evidence.owned_runtime_verified = Test-OwnedRuntime -InstallRoot $installRoot -DataRoot $stateRoot
 
   $uninstall = Invoke-BoundedProcess -FilePath $uninstaller -Arguments @(
     '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'

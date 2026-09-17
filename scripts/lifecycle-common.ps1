@@ -18,14 +18,37 @@ function Assert-LifecycleEvidence {
   param([Parameter(Mandatory)]$Evidence)
   $required = @(
     'digest_verified', 'installer_exit_zero', 'executable_present', 'version_matches',
-    'self_test_passed', 'uninstall_entry_present', 'start_menu_present',
+    'self_test_passed', 'owned_runtime_verified', 'uninstall_entry_present', 'start_menu_present',
     'uninstaller_exit_zero', 'program_files_removed', 'state_preserved'
   )
+  # Every required fact must be proven, and no additional recorded fact may be false.
   $failed = @($required | Where-Object {
     -not $Evidence.Contains($_) -or -not [bool]$Evidence[$_]
-  })
+  }) + @($Evidence.Keys | Where-Object { $_ -notin $required -and -not [bool]$Evidence[$_] })
   if ($failed.Count) { throw "Lifecycle evidence is not certifiable: $($failed -join ', ')." }
   return $true
+}
+
+function Test-OwnedRuntime {
+  <#
+    Run the INSTALLED engine on the INSTALLED interpreter and require it to prove:
+    isolation from the PC's Python, the pinned version, and every shipped file
+    matching the installed manifest. Read-only; touches no Docker or model state.
+  #>
+  param(
+    [Parameter(Mandatory)][string]$InstallRoot,
+    [Parameter(Mandatory)][string]$DataRoot
+  )
+  $python = Join-Path $InstallRoot 'runtime/python/python.exe'
+  $entry = Join-Path $InstallRoot 'installer/afk-payload.py'
+  if (-not (Test-Path -LiteralPath $python -PathType Leaf) -or -not (Test-Path -LiteralPath $entry -PathType Leaf)) { return $false }
+  $run = Invoke-BoundedProcess -FilePath $python -Arguments @(
+    '-I', '-B', $entry, '--program-root', $InstallRoot, '--data-root', $DataRoot, 'runtime-info'
+  ) -TimeoutSeconds 120 -CaptureOutput
+  if ($run.ExitCode -ne 0) { return $false }
+  try { $facts = $run.StandardOutput | ConvertFrom-Json -ErrorAction Stop } catch { return $false }
+  return [bool]($facts.isolated -and $facts.site_disabled -and $facts.pinned_version -eq $facts.python_version -and
+    $facts.installation.manifest_present -and $facts.installation.intact)
 }
 
 function Assert-SafeDisposablePath {

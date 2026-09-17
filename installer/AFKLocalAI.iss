@@ -90,3 +90,23 @@ Filename: "{app}\AFKLocalAI.exe"; Description: "Launch AFK LocalAI"; WorkingDir:
 
 [UninstallRun]
 Filename: "{app}\AFKLocalAI.exe"; Parameters: "--stop --silent"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "StopAFKLocalAI"
+
+; PRODUCT RUNTIME is replaced wholesale on every install. Setup copies new files
+; but never removes files a newer version no longer ships, so a stale module
+; would stay importable and an old interpreter DLL would sit beside a new one.
+; These directories only ever hold shipped product files; user data lives under
+; %LOCALAPPDATA%\AFK LocalAI and in AFK's Docker volumes, never here.
+[InstallDelete]
+Type: filesandordirs; Name: "{app}\runtime"
+Type: filesandordirs; Name: "{app}\src"
+Type: filesandordirs; Name: "{app}\installer"
+; Left in the program folder by the pre-runtime provisioning path (pip metadata,
+; scout and firewall logs). The engine migrates the old .env secret on first run.
+Type: filesandordirs; Name: "{app}\logs"
+
+; Removed with the program so the folder does not survive an uninstall. Nothing
+; here is user content: runtime configuration and chats are elsewhere.
+[UninstallDelete]
+Type: filesandordirs; Name: "{app}\logs"
+Type: files; Name: "{app}\.env"
+Type: dirifempty; Name: "{app}"

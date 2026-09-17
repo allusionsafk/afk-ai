@@ -45,9 +45,11 @@ src/localai/backup.py
 src/localai/cli.py
 src/localai/compose.py
 src/localai/dashboard.py
+src/localai/diagnostics.py
 src/localai/firewall.py
 src/localai/game_mode.py
 src/localai/health.py
+src/localai/installation.py
 src/localai/installer_vet.py
 src/localai/model_aliases.py
 src/localai/model_scout.py
@@ -55,6 +57,9 @@ src/localai/ops.py
 src/localai/paths.py
 src/localai/perf.py
 src/localai/power.py
+src/localai/product_cli.py
+src/localai/product_config.py
+src/localai/product_runtime.py
 src/localai/public_audit.py
 src/localai/readiness.py
 src/localai/scout_categories.py

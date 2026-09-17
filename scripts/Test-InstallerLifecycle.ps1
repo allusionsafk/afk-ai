@@ -40,6 +40,7 @@ $evidence = [ordered]@{
   executable_present = $false
   version_matches = $false
   self_test_passed = $false
+  owned_runtime_verified = $false
   uninstall_entry_present = $false
   start_menu_present = $false
   uninstaller_exit_zero = $false
@@ -80,6 +81,7 @@ try {
   $evidence.self_test_passed = $selfTest.ExitCode -eq 0 -and [bool]$selfTestJson.success
   $stateSentinel = Join-Path $stateRoot 'State/provisioning-state.json'
   if (-not (Test-Path -LiteralPath $stateSentinel -PathType Leaf)) { throw 'Installed self-test did not write its disposable state checkpoint.' }
+  $evidence.owned_runtime_verified = Test-OwnedRuntime -InstallRoot $installRoot -DataRoot $stateRoot
 
   if (-not $uninstaller -or -not (Test-Path -LiteralPath $uninstaller -PathType Leaf)) { throw 'Registered uninstaller is missing.' }
   $uninstallResult = Invoke-BoundedProcess -FilePath $uninstaller -Arguments @(
