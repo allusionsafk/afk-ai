@@ -129,7 +129,7 @@ def test_stop_does_nothing_when_no_owned_container_exists(tmp_path: Path) -> Non
 def test_stop_addresses_exactly_the_proven_containers(tmp_path: Path) -> None:
     program_root = _install(tmp_path)
     compose = str((program_root / "docker-compose.yml").resolve())
-    listing = _ps_row("abc123", "afklocalai", compose)
+    listing = _ps_row("abc123", "afk-localai", compose)
     runner = RecordingRunner(
         CommandResult((), 0, listing, ""),
         CommandResult((), 0, "", ""),
@@ -152,15 +152,14 @@ def test_stop_never_delegates_to_a_project_scoped_compose_command(
     """Compose resolves targets by project + service name, not by the label.
 
     Verified against a live daemon: `docker compose --project-name P --file B
-    stop` stopped a container labelled as belonging to file A. The shipped
-    compose declares `name: localai` and so does the private workbench's, so
-    proving ownership by label and then acting by project name would hand
-    execution to a weaker key than the proof.
+    stop` stopped a container labelled as belonging to file A. Another checkout
+    can declare the same project name, so proving ownership by label and then
+    acting by project name would hand execution to a weaker key than the proof.
     """
     program_root = _install(tmp_path)
     compose = str((program_root / "docker-compose.yml").resolve())
     runner = RecordingRunner(
-        CommandResult((), 0, _ps_row("abc123", "localai", compose), ""),
+        CommandResult((), 0, _ps_row("abc123", "afk-localai", compose), ""),
         CommandResult((), 0, "", ""),
     )
 
@@ -178,10 +177,10 @@ def test_stop_skips_a_foreign_container_sharing_the_project_name(
     """The real collision: same project name, different owning checkout."""
     program_root = _install(tmp_path)
     compose = str((program_root / "docker-compose.yml").resolve())
-    # Both projects are called "localai" - only the config path differs.
+    # Both projects are called "afk-localai" - only the config path differs.
     listing = (
-        _ps_row("foreign99", "localai", WORKBENCH_COMPOSE)
-        + _ps_row("owned01", "localai", compose)
+        _ps_row("foreign99", "afk-localai", WORKBENCH_COMPOSE)
+        + _ps_row("owned01", "afk-localai", compose)
     )
     runner = RecordingRunner(
         CommandResult((), 0, listing, ""),
@@ -225,7 +224,7 @@ def test_stop_targets_only_owned_containers_in_a_mixed_listing(
     compose = str((program_root / "docker-compose.yml").resolve())
     listing = (
         _ps_row("workbench1", "localai", WORKBENCH_COMPOSE)
-        + _ps_row("afk1", "afklocalai", compose)
+        + _ps_row("afk1", "afk-localai", compose)
         + _ps_row("unrelated1", "", "")
     )
     runner = RecordingRunner(
@@ -245,19 +244,33 @@ def test_stop_targets_only_owned_containers_in_a_mixed_listing(
     assert "workbench1" not in runner.flattened
 
 
-def test_stop_refuses_when_owned_projects_conflict(tmp_path: Path) -> None:
+def test_stop_ignores_another_project_sharing_this_compose_path(
+    tmp_path: Path,
+) -> None:
+    """Was: refuse on "conflicting project names".
+
+    Adversarial review reproduced that refusal with leftover 0.1.7rc1
+    containers (project ``localai``, same installed path): Stop then stopped
+    nothing at all. Ownership now needs the AFK project as well as the path, so
+    the other project is not a conflict - it is simply not ours.
+    """
     program_root = _install(tmp_path)
     compose = str((program_root / "docker-compose.yml").resolve())
-    listing = _ps_row("a1", "afklocalai", compose) + _ps_row("b2", "other", compose)
-    runner = RecordingRunner(CommandResult((), 0, listing, ""))
+    listing = _ps_row("a1", "afk-localai", compose) + _ps_row("b2", "other", compose)
+    runner = RecordingRunner(
+        CommandResult((), 0, listing, ""),
+        CommandResult((), 0, "", ""),
+    )
 
     code, lines = afk_ownership.collect_afk_stop_report(
         program_root=program_root, runner=runner
     )
 
     assert code == 0
-    assert len(runner.calls) == 1
-    assert any("conflicting project names" in line for line in lines)
+    assert len(runner.calls) == 2
+    assert runner.calls[1][1:] == ("stop", "a1")
+    assert "b2" not in runner.flattened
+    assert not any("conflicting" in line for line in lines)
 
 
 def test_stop_refuses_when_docker_is_unavailable(tmp_path: Path) -> None:

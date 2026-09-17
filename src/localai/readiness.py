@@ -39,7 +39,6 @@ chat is still the right place to send someone who needs to create that account.
 from __future__ import annotations
 
 import json
-import re
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
@@ -49,9 +48,11 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from localai.afk_ownership import (
+    AFK_COMPOSE_PROJECT,
     CONFIG_FILES_LABEL,
     PROJECT_LABEL,
     docker_executable,
+    is_owned_container,
     owned_compose_file,
 )
 from localai.ops import CommandResult, run_command
@@ -116,8 +117,6 @@ NEXT_ACTION: dict[str, str] = {
     "INFERENCE_FAILED": "diagnostics",
     "STATUS_ERROR": "diagnostics",
 }
-
-_COMPOSE_NAME = re.compile(r"^name:\s*['\"]?([A-Za-z0-9][A-Za-z0-9_.-]*)", re.MULTILINE)
 
 
 class CommandRunner(Protocol):
@@ -245,30 +244,22 @@ class Discovery:
     timed_out: bool = False
 
 
-def compose_project_name(compose_file: Path) -> str | None:
-    """The ``name:`` the shipped compose file claims, or None if unreadable."""
-    try:
-        text = compose_file.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return None
-    match = _COMPOSE_NAME.search(text)
-    return match.group(1) if match else None
-
-
 def discover(
     compose_file: Path,
     *,
     runner: CommandRunner = run_command,
     timeout_sec: int = 30,
 ) -> Discovery:
-    """List containers this installation owns, by config-file path.
+    """List containers this installation owns.
 
-    Ownership is decided exactly the way the uninstall path decides it: the
-    container's compose config-file label must be this installation's own
-    compose file. A project NAME is never sufficient - another checkout on the
-    same machine can claim the same one. Containers that claim this product's
-    project name without being ours are counted (never named): compose would
-    adopt them on ``up``, so their presence blocks a safe start.
+    Ownership is decided exactly the way the uninstall path decides it
+    (:func:`localai.afk_ownership.is_owned_container`): the compose config-file
+    label must be this installation's own compose file AND the project must be
+    AFK's. A project NAME alone is never sufficient - another checkout on the
+    same machine can claim the same one - and neither is the path: an older
+    release's project in the same program folder carries it too. Containers
+    that claim AFK's project from anywhere else are counted (never named):
+    compose would adopt them on ``up``, so their presence blocks a safe start.
     """
     template = (
         '{{.ID}}\t{{.Label "com.docker.compose.service"}}\t{{.Names}}\t'
@@ -284,7 +275,6 @@ def discover(
     if result.code != 0:
         return Discovery([], 0, "Docker is not reachable.")
 
-    project = compose_project_name(compose_file)
     owned: list[OwnedContainer] = []
     foreign = 0
     for line in result.stdout.splitlines():
@@ -299,8 +289,8 @@ def discover(
         )
         if not service or not config_files:
             continue
-        if not _same_path(config_files, str(compose_file)):
-            if project and row_project == project:
+        if not is_owned_container(config_files, row_project, compose_file):
+            if row_project == AFK_COMPOSE_PROJECT:
                 foreign += 1
             continue
         health = "healthy" if "healthy" in status.lower() else ""
@@ -323,14 +313,6 @@ def discover_owned_services(
     """Backwards-compatible view of :func:`discover`."""
     found = discover(compose_file, runner=runner, timeout_sec=timeout_sec)
     return found.owned, found.problem
-
-
-def _same_path(left: str, right: str) -> bool:
-    import os
-
-    return os.path.normcase(os.path.normpath(left)) == os.path.normcase(
-        os.path.normpath(right)
-    )
 
 
 @dataclass(frozen=True)

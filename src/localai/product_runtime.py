@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 
 from localai import readiness
-from localai.afk_ownership import docker_executable
+from localai.afk_ownership import AFK_COMPOSE_PROJECT, docker_executable
 from localai.compose import docker_env
 from localai.ops import CommandResult, run_command
 from localai.product_config import (
@@ -276,14 +276,19 @@ def _wait(
 
 
 def compose_up_args(layout: ProductLayout) -> list[str]:
-    """``docker compose up`` pinned to THIS installation's file and config.
+    """``docker compose up`` pinned to THIS installation's file, config and project.
 
-    The project name comes from the shipped file's ``name:``; start refuses
-    before this runs if any container outside this installation claims it.
+    The project is named explicitly: Compose ranks ``COMPOSE_PROJECT_NAME``
+    (from the environment or an env file) above the file's ``name:``, so an
+    inherited value would otherwise start AFK AI as some other project. Start
+    refuses before this runs if any container outside this installation claims
+    AFK's project.
     """
     args = [
         docker_executable(),
         "compose",
+        "--project-name",
+        AFK_COMPOSE_PROJECT,
         "--project-directory",
         str(layout.program_root),
         "--file",
@@ -292,6 +297,19 @@ def compose_up_args(layout: ProductLayout) -> list[str]:
     if layout.runtime_env.is_file():
         args += ["--env-file", str(layout.runtime_env)]
     return args + ["--progress", "plain", "up", "--detach"]
+
+
+def compose_env() -> dict[str, str]:
+    """Docker's environment without an inherited Compose project name.
+
+    ``--project-name`` already decides the project; nothing a user or another
+    tool left in the environment is passed through to compete with it.
+    """
+    return {
+        key: value
+        for key, value in docker_env().items()
+        if key.upper() != "COMPOSE_PROJECT_NAME"
+    }
 
 
 def start_product(
@@ -348,7 +366,7 @@ def start_product(
     up = deps.stream(
         compose_up_args(layout),
         cwd=layout.program_root,
-        env=docker_env(),
+        env=compose_env(),
         timeout_sec=1800,
         on_line=lambda line: emit(
             "output", phase, status="running", code="compose", message=line[:300]

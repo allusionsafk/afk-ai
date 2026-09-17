@@ -396,16 +396,29 @@ if (Test-Path -LiteralPath $ownershipPath) {
   # Compose resolves targets from the project name and the service names in the
   # file, ignoring the config_files label. Verified against a live daemon: a
   # compose stop scoped with one file stopped a container labelled as belonging
-  # to a different file. The shipped compose declares "name: localai" and so
-  # does the private workbench's, so acting by project name would hand execution
-  # to a weaker key than the proof. Act on the proven container ids instead.
+  # to a different file. Another checkout can declare the same project name, so
+  # acting by project name would hand execution to a weaker key than the proof.
+  # Act on the proven container ids instead.
   Assert-True 'ownership stops the proven containers by id' (
     $ownershipBody -match [regex]::Escape('"stop", *stack.container_ids'))
   Assert-True 'ownership never delegates to a project-scoped compose command' (
     $ownershipBody -notmatch [regex]::Escape('"--project-name"') -and
     $ownershipBody -notmatch [regex]::Escape('"compose"'))
-  Assert-True 'ownership fails closed on conflicting projects' (
-    $ownershipBody -match 'conflicting project names')
+  # Path alone is not ownership: the 0.1.7 release candidate left containers
+  # with THIS installation's compose path under project "localai", and treating
+  # them as owned made Stop refuse and Home read the current stack as stopped.
+  Assert-True 'ownership requires the AFK project as well as the config path' (
+    $ownershipBody -match [regex]::Escape('AFK_COMPOSE_PROJECT = "afk-localai"') -and
+    $ownershipBody -match 'project == AFK_COMPOSE_PROJECT and _same_path' -and
+    $ownershipBody -match 'if not is_owned_container\(config_files, project, compose_file\)')
+  $readinessText = Get-ContractText -Path (Require-File 'src/localai/readiness.py')
+  Assert-True 'readiness decides ownership with the same two-key rule as stop' (
+    $readinessText -match 'if not is_owned_container\(config_files, row_project, compose_file\)' -and
+    $readinessText -notmatch 'compose_project_name')
+  $runtimeText = Get-ContractText -Path (Require-File 'src/localai/product_runtime.py')
+  Assert-True 'compose up names the AFK project explicitly' (
+    $runtimeText -match '"--project-name",\s*AFK_COMPOSE_PROJECT,' -and
+    $runtimeText -match 'env=compose_env\(\)' -and $runtimeText -notmatch 'env=docker_env\(\)')
 }
 
 if (Test-Path -LiteralPath $manifestPath) {
