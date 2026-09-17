@@ -12,7 +12,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from localai.ops import run_command
-from localai.paths import REPO_ROOT, repo_path
+from localai.paths import REPO_ROOT, compose_value, repo_path
 
 DEFAULT_MODEL = "qwen2.5-grounded"
 
@@ -177,7 +177,9 @@ def read_default_model(compose_text: str | None = None) -> str:
         except OSError:
             return DEFAULT_MODEL
     match = re.search(r"DEFAULT_MODELS=([^\s]+)", compose_text)
-    return match.group(1) if match else DEFAULT_MODEL
+    if match is None:
+        return DEFAULT_MODEL
+    return compose_value(match.group(1)) or DEFAULT_MODEL
 
 
 def replace_default_model(compose_text: str, model: str) -> str:

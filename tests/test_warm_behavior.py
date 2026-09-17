@@ -380,3 +380,22 @@ def test_warm_unreachable_ollama_is_optional_unless_required(
     assert optional_lines == required_lines == [
         "WARNING: [AI-Warm] Ollama server is not reachable; skipping preload."
     ]
+
+
+def test_the_installed_compose_interpolation_resolves_like_compose(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The product feeds DEFAULT_MODELS from runtime config instead of rewriting.
+
+    Every DEFAULT_MODELS= reader must see what compose itself would use: the
+    configured value when present, the file's default otherwise.
+    """
+    compose = (
+        "    environment:\n"
+        "      - DEFAULT_MODELS=${AFK_DEFAULT_MODEL:-qwen3.5:9b-32k}\n"
+    )
+    monkeypatch.delenv("AFK_DEFAULT_MODEL", raising=False)
+    assert warm.read_default_model(compose) == "qwen3.5:9b-32k"
+
+    monkeypatch.setenv("AFK_DEFAULT_MODEL", "qwen3.5:2b-8k")
+    assert warm.read_default_model(compose) == "qwen3.5:2b-8k"

@@ -52,7 +52,10 @@ services:
       # Default model for new chats + a small fast model for titles/tags/search-queries.
       # Keep the default responsive; pick qwen3-grounded or deep-thinking-qwen3.6
       # manually when answer quality matters more than startup latency.
-      - DEFAULT_MODELS=qwen3.5:9b-32k
+      # An installed AFK AI supplies AFK_DEFAULT_MODEL from its runtime config
+      # (%LOCALAPPDATA%\AFK LocalAI\Config\runtime.env) via --env-file, so this
+      # installed file is never rewritten and an update cannot reset the model.
+      - DEFAULT_MODELS=${AFK_DEFAULT_MODEL:-qwen3.5:9b-32k}
       # Leave TASK_MODEL blank so Open WebUI title/tag/query tasks use the
       # current chat model. Pointing this at any separate model loads that
       # model after a reply and can evict the model you are actively using.

@@ -13,7 +13,7 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 from localai.ops import run_command
-from localai.paths import REPO_ROOT, repo_path
+from localai.paths import REPO_ROOT, compose_value, repo_path
 from localai.power import format_number
 
 # WebBrain (the supported browser agent) connects directly to Ollama once this
@@ -145,7 +145,7 @@ def read_default_model(compose_text: str | None = None) -> str:
     text = compose_text if compose_text is not None else read_compose_text()
     match = re.search(r"DEFAULT_MODELS=([^\s]+)", text)
     if match:
-        return match.group(1).strip()
+        return compose_value(match.group(1))
     return ""
 
 
