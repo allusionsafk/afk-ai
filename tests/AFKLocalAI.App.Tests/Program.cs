@@ -333,6 +333,38 @@ finally
     var collision = HomeReducer.Reduce(HomeModel.Initial, Seen(t0, Status("Failed", reason: "FOREIGN_PROJECT_COLLISION", chatReady: false, url: null, inference: "not_run", next: "diagnostics")));
     Check("a foreign collision offers diagnostics, never start or chat", collision.Kind == HomeKind.Failed && HomePresenter.Present(collision, t0).Primary == HomeAction.Diagnostics);
 
+    // Regression (adversarial review of PR #24): Home dropped a Ready only after
+    // a SUCCESSFUL setup or repair. A failed repair left the old qualification in
+    // place, liveness kept it alive, and Open Chat routed to a runtime the repair
+    // had just torn down. Any lifecycle operation voids the qualification first.
+    foreach (var operationName in new[] { "repair", "setup" })
+    {
+        var readyBefore = HomeReducer.Reduce(HomeModel.Initial, Seen(t0, Status("Ready")));
+        var begun = HomeReducer.Reduce(readyBefore, new LifecycleOperationStarted(t0.AddMinutes(1), operationName));
+        Check($"{operationName} start voids the qualification",
+            begun.Kind != HomeKind.Ready && begun.Qualified is null && begun.NeedsQualification);
+        Check($"chat cannot open once {operationName} has started",
+            !ChatGate.CanOpen(begun, t0.AddMinutes(1)) && ChatGate.BeforeOpen(begun, t0.AddMinutes(1)) == ChatGateDecision.Requalify &&
+            HomePresenter.Present(begun, t0.AddMinutes(1)).Primary != HomeAction.OpenChat);
+        // The operation fails; the services it did not reach still answer liveness.
+        var afterFailure = HomeReducer.Reduce(begun, Seen(t0.AddMinutes(2), Live()));
+        Check($"a failed {operationName} is not Ready even while liveness passes",
+            afterFailure.Kind != HomeKind.Ready && !ChatGate.CanOpen(afterFailure, t0.AddMinutes(2)) &&
+            ChatGate.BeforeOpen(afterFailure, t0.AddMinutes(2)) == ChatGateDecision.Requalify);
+        var afterUnobservable = HomeReducer.Reduce(begun, new EngineUnavailable(t0.AddMinutes(2), "exit 1", RepairNeeded: false));
+        Check($"a failed {operationName} with no status is not Ready", afterUnobservable.Kind != HomeKind.Ready && !ChatGate.CanOpen(afterUnobservable, t0.AddMinutes(2)));
+        var requalified = HomeReducer.Reduce(afterFailure, Seen(t0.AddMinutes(3), Status("Ready")));
+        Check($"only fresh qualification restores Ready after {operationName}", requalified.Kind == HomeKind.Ready && ChatGate.CanOpen(requalified, t0.AddMinutes(3)));
+    }
+    var mainForm = File.ReadAllText(Path.Combine(root, "src", "AFKLocalAI.App", "MainForm.cs"));
+    var provisioning = mainForm.IndexOf("private async Task RunProvisioningAsync(bool repair)", StringComparison.Ordinal);
+    var invalidate = provisioning < 0 ? -1 : mainForm.IndexOf("new LifecycleOperationStarted(", provisioning, StringComparison.Ordinal);
+    var launch = provisioning < 0 ? -1 : mainForm.IndexOf("_controller.Provision(repair)", provisioning, StringComparison.Ordinal);
+    var firstAwait = provisioning < 0 ? -1 : mainForm.IndexOf("await ", provisioning, StringComparison.Ordinal);
+    Check("setup and repair invalidate Ready before any work begins",
+        provisioning >= 0 && invalidate > provisioning && invalidate < launch && invalidate < firstAwait,
+        $"provisioning={provisioning} invalidate={invalidate} firstAwait={firstAwait} launch={launch}");
+
     // Onboarding is a separate fact, and chat is where it happens.
     var onboarding = HomeReducer.Reduce(HomeModel.Initial, Seen(t0, Status("Ready", onboarding: "true")));
     var onboardingView = HomePresenter.Present(onboarding, t0);

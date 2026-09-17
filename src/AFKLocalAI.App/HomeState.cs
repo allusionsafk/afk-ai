@@ -37,6 +37,12 @@ public sealed record StatusObserved(DateTimeOffset At, ProductStatus Status) : O
 public sealed record EngineUnavailable(DateTimeOffset At, string Detail, bool RepairNeeded) : Observation(At);
 
 /// <summary>
+/// Setup or repair is about to change the runtime. Whatever was proven before no
+/// longer describes what will be running afterwards.
+/// </summary>
+public sealed record LifecycleOperationStarted(DateTimeOffset At, string Operation) : Observation(At);
+
+/// <summary>
 /// Turns engine evidence into what Home shows. The rules that keep Home honest:
 /// </summary>
 /// <remarks>
@@ -47,6 +53,9 @@ public sealed record EngineUnavailable(DateTimeOffset At, string Detail, bool Re
 /// nothing regressed in between) but never create one.</item>
 /// <item>Any regressed, failed, or unobservable status drops the qualification
 /// immediately: a stale READY cannot survive a runtime failure.</item>
+/// <item>Starting setup or repair drops it too, before the operation runs: only
+/// a qualification taken AFTER the operation can show READY again, whether the
+/// operation succeeded or not.</item>
 /// </list>
 /// This is not a second readiness interpretation - it never inspects services.
 /// It decides only how long engine evidence stays valid.
@@ -60,6 +69,8 @@ public static class HomeReducer
         EngineUnavailable unavailable => new HomeModel(
             unavailable.RepairNeeded ? HomeKind.RepairNeeded : HomeKind.Unknown,
             null, null, unavailable.At, unavailable.Detail, NeedsQualification: true),
+        LifecycleOperationStarted started => new HomeModel(HomeKind.Checking, null, null, started.At,
+            "AFK AI will check chat again when this finishes.", NeedsQualification: true),
         StatusObserved observed => ReduceStatus(previous, observed),
         _ => previous
     };

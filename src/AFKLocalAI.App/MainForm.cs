@@ -742,6 +742,9 @@ public sealed class MainForm : Form
     private async Task RunProvisioningAsync(bool repair)
     {
         if (IsBusy) return;
+        // Void the previous qualification BEFORE anything runs: if this fails or
+        // is cancelled, a Ready from before it must not survive through liveness.
+        _home = HomeReducer.Reduce(_home, new LifecycleOperationStarted(DateTimeOffset.UtcNow, repair ? "repair" : "setup"));
         var operation = BeginOperation(repair ? "repair" : "setup");
         SetBusy(true, repair ? "Repairing AFK AI…" : "Setting up AFK AI…");
         _progress.Clear();
