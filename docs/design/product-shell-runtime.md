@@ -251,11 +251,17 @@ When the engine cannot run, the shell writes a smaller fallback report
 - Launcher: bootstrap fetched from an immutable commit and verified before
   execution; release order is tag, pin `bootstrap.ps1`, pin the launcher.
 
-Not changed here, recorded for follow-up: setup sets
-`OLLAMA_HOST=0.0.0.0:11434` so containers can reach Ollama, and relies on the
-firewall step (which needs PowerShell 7 and administrator approval) to keep it
-off physical networks. Whether `host.docker.internal` reaches a
-loopback-bound Ollama needs live verification before that can be narrowed.
+Setup sets `OLLAMA_HOST=0.0.0.0:11434` so the chat container can reach Ollama
+through `host.docker.internal`. That makes the firewall rule part of the
+security invariant: the secure phase runs `ai-firewall.ps1 -Apply` on the same
+inbox Windows PowerShell 5.1 as setup (administrator approval required), then
+reads `LocalAI-Block-Physical-Ports` back and requires it to be enabled,
+inbound, Block, TCP, covering 3000/8888/11434/8080/8880/8188, for any remote
+address and program, scoped to every physical adapter and to no virtual one.
+If that cannot be verified, setup fails with the exposure stated; it never
+reports the install as secured on the tool's exit code alone. Whether
+`host.docker.internal` reaches a loopback-bound Ollama still needs live
+verification before the bind can be narrowed.
 
 ## Tests
 
@@ -271,4 +277,5 @@ loopback-bound Ollama needs live verification before that can be narrowed.
 | Start never opens a browser; refuses foreign collisions | `tests/test_product_engine_behavior.py` |
 | Diagnostics privacy | `tests/test_diagnostics_privacy_behavior.py` |
 | Upgrade removes stale runtime files; uninstall leaves nothing in the program folder; state preserved | `scripts/Test-LifecycleUpgrade.ps1` (certified locally on real installer bytes) |
+| Ollama exposure only with a verified block rule; no unverified loopback claims | `tests/Test-InstallerFirewall.ps1` (runs on Windows PowerShell 5.1) |
 | Launcher verifies before executing | `tests/test_launcher_integrity_behavior.py` (runs the launcher's own verification against tampered bytes) |

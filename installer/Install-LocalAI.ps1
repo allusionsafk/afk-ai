@@ -2,9 +2,11 @@
 <#
   Install-LocalAI.ps1 - AFK AI's guided setup orchestrator.
 
-  Takes a Windows 11 PC to a working, LOOPBACK-ONLY local AI matched to its
-  hardware, qualified by the product's own readiness check, with no network
-  exposure unless explicitly opted in.
+  Takes a Windows 11 PC to a working local AI matched to its hardware, qualified
+  by the product's own readiness check. Chat is published on 127.0.0.1 only. The
+  model runtime must listen on all interfaces for the chat container to reach it,
+  so setup does not finish until a firewall rule blocking AFK AI's ports on
+  physical networks has been applied AND read back (Invoke-PhaseSecure).
 
   Runs on the Windows PowerShell 5.1 that ships with Windows 11: the native app
   launches it with powershell.exe, so a clean PC needs no PowerShell 7 to set up.
@@ -475,23 +477,26 @@ function Invoke-PhaseSecure {
   [CmdletBinding(SupportsShouldProcess)]
   param()
   Write-Card 'Secure by default' @(
-    'Blocking AFK AI ports on physical networks; loopback-only; no autostart.')
-  $pwsh = Get-Command 'pwsh.exe' -ErrorAction SilentlyContinue
-  if (-not $pwsh) {
-    # The firewall audit tool needs PowerShell 7. Setup no longer does, so say
-    # plainly that this optional hardening step did not run.
-    Write-Host '   WARN: firewall hardening skipped (it needs PowerShell 7). Services still bind to loopback only.' -ForegroundColor Yellow
-    Write-InstallerEvent -EventType 'checkpoint' -Phase 'secure' -Status 'skipped' -Code 'firewall-skipped' `
-      -Message 'Firewall hardening needs PowerShell 7 and was skipped.' | ForEach-Object { [Console]::Out.WriteLine($_) }
-  } elseif ($PSCmdlet.ShouldProcess('firewall', 'ai-firewall -Apply')) {
-    # ai-firewall exits 0 OK / 1 warnings / 2 failures; UAC decline or timeout
-    # must not silently pass as "secured".
-    $fw = Invoke-AiProcess -FilePath $pwsh.Source -ArgumentList @(
+    'The model runtime listens on this PC''s network interfaces so the chat container can reach it.',
+    'Blocking AFK AI''s ports on physical networks - Windows will ask for administrator approval.')
+  if ($PSCmdlet.ShouldProcess('firewall', 'ai-firewall -Apply, then verify the AFK AI block rule')) {
+    # Runs on THIS PowerShell (inbox Windows PowerShell 5.1 when the app runs
+    # setup), never on an optional PowerShell 7. ai-firewall elevates itself.
+    $fw = Invoke-AiProcess -FilePath (Get-Process -Id $PID).Path -ArgumentList @(
         '-NoProfile', '-ExecutionPolicy', 'Bypass',
         '-File', (Join-Path $RepoRoot 'ai-firewall.ps1'), '-Apply') -TimeoutSec 300 -WorkingDirectory $RepoRoot
-    if ($fw.Code -gt 1) {
-      Write-Host '   WARN: firewall hardening did not complete (was the admin prompt declined?).' -ForegroundColor Yellow
+    # The exit code is not the evidence (a declined prompt, a timeout or a
+    # partial apply can all look alike). Read the rule back from Windows.
+    $adapters = @()
+    try { $adapters = @(Get-AfkPhysicalAdapterAliases) } catch { $adapters = @() }
+    $problems = @(Get-AfkFirewallRuleProblems -Rule (Get-AfkFirewallRuleEvidence) -PhysicalAdapters $adapters)
+    if ($problems.Count) {
+      throw ("AFK AI could not confirm the Windows Firewall rule that keeps its model runtime (port 11434) " +
+        "and chat ports off your local network: $($problems -join '; '). Until it is in place, other devices " +
+        "on your network may be able to reach the model runtime. Choose Repair and approve the Windows " +
+        "administrator prompt. (firewall tool exit $($fw.Code))")
     }
+    Write-Host '   Firewall: AFK AI ports are blocked on physical networks (rule verified).' -ForegroundColor DarkGray
   }
   # WinNAT's dynamic port pool sometimes reserves 3000 after a reboot, which
   # blocks Docker's 127.0.0.1:3000 publish. Detect it and explain the fix (it
@@ -533,7 +538,7 @@ function Invoke-PhaseSelfTest {
   }
   $ready = @('Chat is ready. Open AFK AI and choose Open Chat.')
   if ($status.chat.onboarding_required) { $ready += 'The first account you create in chat becomes the owner of this PC''s chat.' }
-  $ready += 'Security: loopback-only, no autostart.'
+  $ready += 'Security: chat is served on this PC only; AFK AI ports are blocked on physical networks; no autostart.'
   if (@($State.intent) -contains 'web') {
     $ready += 'Browser agent: install WebBrain from the Chrome Web Store, set its server URL'
     $ready += '  to http://localhost:11434, and keep the Chrome window visible during tasks.'
@@ -586,7 +591,7 @@ Or install the missing tools manually, then open AFK AI again.
 
 Write-Card 'AFK AI setup' @(
   $(if ($DryRun) { 'DRY RUN - nothing will be changed.' } elseif ($Repair) { 'Repair: re-running product setup. Your chats and settings are kept.' } else { 'Setting up AFK AI on this PC.' }),
-  'Loopback-only, no autostart, no LAN exposure unless you opt in.')
+  'Chat is served on this PC only. Setup blocks AFK AI ports on your local network and stops if it cannot. No autostart.')
 
 foreach ($phase in $Phases) {
   if (Test-PhaseDone -State $State -Phase $phase.Name) {

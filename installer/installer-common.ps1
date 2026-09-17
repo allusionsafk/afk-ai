@@ -350,6 +350,101 @@ function Set-OllamaHostEnv {
   }
 }
 
+# ------------------------------------------------------------ firewall evidence
+
+# OLLAMA_HOST=0.0.0.0 (above) makes the model runtime listen on every interface,
+# because Open WebUI's container reaches it through host.docker.internal. The
+# block rule ai-firewall.ps1 -Apply creates is therefore part of the security
+# invariant, not optional hardening: setup may only call the install secured once
+# this rule has been READ BACK and found to hold. Values mirror ai-firewall.ps1
+# ($PhysicalBlockRuleId, $LocalAIPorts, its adapter filter); a contract test
+# keeps them in step.
+$script:AfkBlockRuleId = 'LocalAI-Block-Physical-Ports'
+$script:AfkBlockedPorts = @(3000, 8888, 11434, 8080, 8880, 8188)
+# Adapters the rule must NOT cover: blocking them cuts the chat container off
+# from the model runtime (vEthernet/WSL/Docker) or breaks opt-in remote access.
+$script:AfkNonPhysicalAdapterPattern = 'Tailscale|Loopback|vEthernet|Docker|WSL'
+
+function Test-AfkPortSpecCovers {
+  param($LocalPort, [Parameter(Mandatory)][int]$Port)
+  foreach ($raw in @($LocalPort)) {
+    foreach ($part in (([string]$raw) -split ',')) {
+      $part = $part.Trim()
+      if ($part -eq 'Any') { return $true }
+      if ($part -match '^(\d+)-(\d+)$') {
+        if ($Port -ge [int]$Matches[1] -and $Port -le [int]$Matches[2]) { return $true }
+      } elseif ($part -match '^\d+$' -and [int]$part -eq $Port) {
+        return $true
+      }
+    }
+  }
+  return $false
+}
+
+function Get-AfkFirewallRuleProblems {
+  <#
+    Pure: what is wrong with the AFK AI block rule, as read back from Windows.
+    An empty result is the only "secured" verdict. $Rule is the shape
+    Get-AfkFirewallRuleEvidence returns ($null when the rule does not exist);
+    $PhysicalAdapters are the adapter aliases the rule must cover.
+  #>
+  param($Rule, [string[]]$PhysicalAdapters = @())
+  if ($null -eq $Rule) { return @("the firewall rule $script:AfkBlockRuleId does not exist") }
+  $problems = @()
+  if ("$($Rule.Enabled)" -ne 'True') { $problems += 'the rule is not enabled' }
+  if ("$($Rule.Direction)" -ne 'Inbound') { $problems += 'the rule is not inbound' }
+  if ("$($Rule.Action)" -ne 'Block') { $problems += 'the rule does not block' }
+  if ("$($Rule.Protocol)" -notin @('TCP', 'Any')) { $problems += "the rule does not cover TCP ($($Rule.Protocol))" }
+  $uncovered = @($script:AfkBlockedPorts | Where-Object { -not (Test-AfkPortSpecCovers -LocalPort $Rule.LocalPort -Port $_) })
+  if ($uncovered.Count) { $problems += "the rule does not cover port(s) $($uncovered -join ', ')" }
+  $remote = @($Rule.RemoteAddress | ForEach-Object { "$_" })
+  if ($remote.Count -ne 1 -or $remote[0] -ne 'Any') { $problems += 'the rule only blocks some remote addresses' }
+  if ("$($Rule.Program)" -ne 'Any') { $problems += 'the rule only applies to one program' }
+
+  $aliases = @($Rule.InterfaceAlias | ForEach-Object { "$_" } | Where-Object { $_ })
+  if (-not $aliases.Count -or $aliases -contains 'Any') {
+    $problems += 'the rule is not scoped to physical network adapters'
+  } else {
+    $virtual = @($aliases | Where-Object { $_ -match $script:AfkNonPhysicalAdapterPattern })
+    if ($virtual.Count) { $problems += 'the rule also covers a virtual adapter the chat container needs' }
+  }
+  $physical = @($PhysicalAdapters | Where-Object { $_ })
+  if (-not $physical.Count) {
+    $problems += 'no physical network adapter was found to check the rule against'
+  } else {
+    $missing = @($physical | Where-Object { $aliases -notcontains $_ })
+    if ($missing.Count) { $problems += "the rule does not cover $($missing.Count) physical network adapter(s)" }
+  }
+  return $problems
+}
+
+function Get-AfkFirewallRuleEvidence {
+  # Read-only; works without administrator rights. $null when the rule is absent.
+  $rule = Get-NetFirewallRule -Name $script:AfkBlockRuleId -ErrorAction SilentlyContinue
+  if (-not $rule) { return $null }
+  $ports = $rule | Get-NetFirewallPortFilter
+  $interfaces = $rule | Get-NetFirewallInterfaceFilter
+  $addresses = $rule | Get-NetFirewallAddressFilter
+  $application = $rule | Get-NetFirewallApplicationFilter
+  return [pscustomobject]@{
+    Enabled        = "$($rule.Enabled)"
+    Direction      = "$($rule.Direction)"
+    Action         = "$($rule.Action)"
+    Protocol       = "$($ports.Protocol)"
+    LocalPort      = @($ports.LocalPort | ForEach-Object { "$_" })
+    InterfaceAlias = @($interfaces.InterfaceAlias | ForEach-Object { "$_" })
+    RemoteAddress  = @($addresses.RemoteAddress | ForEach-Object { "$_" })
+    Program        = "$($application.Program)"
+  }
+}
+
+function Get-AfkPhysicalAdapterAliases {
+  # Same selection ai-firewall.ps1 -Apply scopes the rule to.
+  return @(Get-NetAdapter -Physical -ErrorAction Stop |
+    Where-Object { $_.Status -ne 'Disabled' -and $_.Name -notmatch $script:AfkNonPhysicalAdapterPattern } |
+    ForEach-Object { $_.Name } | Where-Object { $_ } | Sort-Object -Unique)
+}
+
 # WebBrain (the supported browser-agent extension) calls Ollama's OpenAI-style
 # /v1 endpoints straight from its Chrome extension origin, and Ollama 403s
 # extension origins it does not know. Allowlist exactly WebBrain's id (stable

@@ -1,4 +1,4 @@
-#requires -Version 7.0
+#requires -Version 5.1
 <#
   ai-firewall.ps1 - Audit and repair the intended localai firewall posture.
 
