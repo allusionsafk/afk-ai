@@ -141,6 +141,14 @@ PLACEHOLDER_USER_NAMES = frozenset(
     }
 )
 
+# GitHub preserves redirects after a repository rename. These are public product
+# identities that were canonical before the rename, not arbitrary repositories
+# owned by the same account. Keep the exemption keyed by the CURRENT repository
+# name so unrelated sibling repositories remain findings.
+HISTORICAL_PUBLIC_REPO_ALIASES: dict[str, tuple[str, ...]] = {
+    "afk-ai": ("localai-windows-starter",),
+}
+
 
 def build_patterns(
     extra_patterns: tuple[str, ...] = (),
@@ -249,9 +257,15 @@ def partition_self_references(
     if origin is None:
         return findings, 0
     owner, repo = origin
-    self_ref = re.compile(rf"\b{re.escape(owner)}/{re.escape(repo)}(?![\w-])")
-    companion_site_repo = re.compile(
-        rf"\b{re.escape(owner)}/{re.escape(repo)}-site(?![\w-])"
+    approved_repos = {repo, f"{repo}-site"}
+    for alias in HISTORICAL_PUBLIC_REPO_ALIASES.get(repo, ()):
+        approved_repos.add(alias)
+        approved_repos.add(f"{alias}-site")
+    repo_choices = "|".join(
+        re.escape(name) for name in sorted(approved_repos, key=len, reverse=True)
+    )
+    approved_repo_ref = re.compile(
+        rf"\b{re.escape(owner)}/(?:{repo_choices})(?![\w-])"
     )
     # Deliberately anchored to workers.dev: this allows the project's own
     # deployment host, not any string that happens to contain the owner name.
@@ -261,15 +275,13 @@ def partition_self_references(
     allowed = 0
     for finding in findings:
         if finding.kind == "Origin GitHub owner":
-            is_self_url = bool(self_ref.search(finding.text))
-            is_companion_site_repo = bool(companion_site_repo.search(finding.text))
+            is_approved_repo = bool(approved_repo_ref.search(finding.text))
             is_self_site = bool(self_site.search(finding.text))
             is_license_copyright = finding.file == "LICENSE" and bool(
                 copyright_line.match(finding.text)
             )
             if (
-                is_self_url
-                or is_companion_site_repo
+                is_approved_repo
                 or is_self_site
                 or is_license_copyright
             ):
