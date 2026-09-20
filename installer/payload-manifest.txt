@@ -55,6 +55,7 @@ src/localai/model_aliases.py
 src/localai/model_scout.py
 src/localai/ops.py
 src/localai/optimizer.py
+src/localai/optimizer_cli.py
 src/localai/optimizer_ollama.py
 src/localai/paths.py
 src/localai/perf.py
