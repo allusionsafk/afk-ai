@@ -1,4 +1,4 @@
-# AFK LocalAI Windows distribution
+# AFK AI Windows distribution
 
 The supported user entry point is `AFKLocalAISetup-<version>-x64.exe`. The
 installer deploys a self-contained `AFKLocalAI.exe` WinForms shell, AFK AI's own

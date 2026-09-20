@@ -29,7 +29,7 @@ if exist "%BOOT%" goto :run
 set "BOOTSTRAP_COMMIT=78b4b13aaf32e4eff8b8a6cb9773e5aff7a289ef"
 set "BOOTSTRAP_SHA256=440B3308BC11A3CA96432170A026B20AC7BA5A087C62B36112A4659CF3F619EF"
 set "BOOT=%TEMP%\localai-bootstrap-%BOOTSTRAP_COMMIT%.ps1"
-set "BOOT_URL=https://raw.githubusercontent.com/allusionsafk/localai-windows-starter/%BOOTSTRAP_COMMIT%/installer/bootstrap.ps1"
+set "BOOT_URL=https://raw.githubusercontent.com/allusionsafk/afk-ai/%BOOTSTRAP_COMMIT%/installer/bootstrap.ps1"
 
 echo   Downloading the installer...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; $out=$env:BOOT; Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue; Invoke-WebRequest -UseBasicParsing $env:BOOT_URL -OutFile $out; $actual=(Get-FileHash -LiteralPath $out -Algorithm SHA256).Hash.ToUpperInvariant(); $expected=$env:BOOTSTRAP_SHA256.ToUpperInvariant(); if ($actual -ne $expected) { Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue; Write-Error ('Installer integrity check failed. Expected SHA-256 ' + $expected + ', got ' + $actual + '. Refusing to run the downloaded bootstrap.'); exit 23 }"

@@ -31,7 +31,7 @@ $script:PreflightClassifierVersion = 2
 # only applied when the WSL backend is actually the relevant path.
 $script:PreflightWslMinimumVersion = [version]'2.1.5'
 
-# Windows 11 is the documented Friend Beta target (README, SUPPORT.md,
+# Windows 11 is the documented AFK AI Beta target (README, SUPPORT.md,
 # docs/releases/0.1.7rc1.md). 22000 is the first Windows 11 build.
 $script:PreflightMinimumWindowsBuild = 22000
 
@@ -236,7 +236,7 @@ function Get-PreflightWslState {
 
 function Get-PreflightDockerState {
     # `docker.exe` existing is NOT Docker being ready - that weak check is what
-    # let the Friend Beta reach model setup on a machine Docker could never run
+    # let AFK AI Beta reach model setup on a machine Docker could never run
     # on. Readiness requires a reachable LOCAL Linux engine.
     param($Evidence, [string]$MinimumDockerVersion)
 

@@ -1,11 +1,11 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Friend Beta support guide
-    url: https://github.com/allusionsafk/localai-windows-starter/blob/master/SUPPORT.md
+  - name: AFK AI Beta support guide
+    url: https://github.com/allusionsafk/afk-ai/blob/master/SUPPORT.md
     about: Check supported scope, safe diagnostic guidance, and the right issue form before opening a report.
   - name: AFK AI website issue
-    url: https://github.com/allusionsafk/localai-windows-starter-site/issues/new/choose
+    url: https://github.com/allusionsafk/afk-ai-site/issues/new/choose
     about: Report landing-page, accessibility, or pinned website-download problems in the website repository.
   - name: Security vulnerability
-    url: https://github.com/allusionsafk/localai-windows-starter/security/advisories/new
+    url: https://github.com/allusionsafk/afk-ai/security/advisories/new
     about: Report security or privacy vulnerabilities privately. Do not post secrets or exploit details in a public issue.

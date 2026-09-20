@@ -1,6 +1,6 @@
-# AFK LocalAI for Windows
+# AFK AI for Windows
 
-> Public Beta `0.1.7rc1` · current source candidate `0.2.0-rc1`
+> AFK AI Beta · `0.1.7rc1` public download · `0.2.0-rc1` unqualified source candidate
 
 AFK AI is a local-first AI workspace for Windows 11. It combines Ollama, Open
 WebUI, SearXNG, local voice, hardware-aware model selection, and a guided Windows

@@ -1,8 +1,8 @@
-# AFK LocalAI Design System
+# AFK AI Design System
 
 ## Foundation
 
-AFK LocalAI uses the established Control Center identity: a restrained dark
+AFK AI uses the established Control Center identity: a restrained dark
 desktop utility with cool neutral surfaces and one cyan action color. The native
 shell should feel at home beside Windows 11 settings without imitating system
 chrome. Design serves setup clarity; decoration never outranks status or action.

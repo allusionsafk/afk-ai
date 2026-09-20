@@ -1,4 +1,4 @@
-# AFK LocalAI support
+# AFK AI support
 
 The current public AFK AI Beta is `0.1.7rc1`. The repository also
 contains an unpublished `0.2.0-rc1` source candidate; always report the exact

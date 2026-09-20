@@ -13,7 +13,7 @@ from localai.public_audit import (
 # Built at runtime so public-audit -Strict does not flag its own fixtures:
 # the audit scans tracked source lines for the literal owner marker.
 OWNER = "allusion" + "safk"
-ORIGIN = (OWNER, "localai-windows-starter")
+ORIGIN = (OWNER, "afk-ai")
 
 
 def make_finding(kind: str, file: str, text: str, line: int = 1) -> Finding:
@@ -25,7 +25,7 @@ def test_origin_url_self_reference_is_allowed() -> None:
         make_finding(
             "Origin GitHub owner",
             "README.md",
-            "https://github.com/allusionsafk/localai-windows-starter/releases/latest",
+            "https://github.com/allusionsafk/afk-ai/releases/latest",
         )
     ]
     kept, allowed = partition_self_references(findings, ORIGIN)
@@ -38,7 +38,7 @@ def test_public_companion_site_repo_is_allowed() -> None:
         make_finding(
             "Origin GitHub owner",
             ".github/ISSUE_TEMPLATE/config.yml",
-            f"https://github.com/{OWNER}/localai-windows-starter-site/issues/new/choose",
+            f"https://github.com/{OWNER}/afk-ai-site/issues/new/choose",
         )
     ]
     kept, allowed = partition_self_references(findings, ORIGIN)
@@ -97,7 +97,7 @@ def test_similar_sibling_repo_name_is_not_allowed() -> None:
         make_finding(
             "Origin GitHub owner",
             "docs/notes.md",
-            f"see github.com/{OWNER}/localai-windows-starter-site-backup",
+            f"see github.com/{OWNER}/afk-ai-site-backup",
         )
     ]
     kept, allowed = partition_self_references(findings, ORIGIN)
@@ -106,13 +106,13 @@ def test_similar_sibling_repo_name_is_not_allowed() -> None:
 
 
 def test_longer_repo_name_does_not_match_shorter_origin() -> None:
-    # With origin owner/localai, owner/localai-windows-starter is a DIFFERENT
+    # With origin owner/localai, owner/afk-ai is a DIFFERENT
     # repo; the trailing (?![\w-]) lookahead must reject the prefix match.
     findings = [
         make_finding(
             "Origin GitHub owner",
             "docs/notes.md",
-            "https://github.com/allusionsafk/localai-windows-starter/releases",
+            "https://github.com/allusionsafk/afk-ai/releases",
         )
     ]
     kept, allowed = partition_self_references(findings, (OWNER, "localai"))

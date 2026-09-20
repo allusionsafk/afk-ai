@@ -1,4 +1,4 @@
-# Install, upgrade, and uninstall AFK LocalAI
+# Install, upgrade, and uninstall AFK AI
 
 ## Clean install
 

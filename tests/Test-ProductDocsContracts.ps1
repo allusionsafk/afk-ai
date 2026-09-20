@@ -22,17 +22,17 @@ $docs = Get-ContractText -Path (Join-Path $Root 'docs/README.md')
 $releasePath = Join-Path $Root 'docs/releases/0.2.0-rc1.md'
 $lifecyclePath = Join-Path $Root 'docs/install-upgrade-uninstall.md'
 
-Assert-True 'README uses canonical product name' ($readme -match '^# AFK LocalAI for Windows')
+Assert-True 'README uses canonical product name' ($readme -match '^# AFK AI for Windows')
 Assert-True 'README names one-click installer' ($readme -match 'AFKLocalAISetup-0\.2\.0-rc1-x64\.exe')
 Assert-True 'README does not direct normal users to CMD bootstrap' ($readme -notmatch 'double-click.*\.cmd')
 Assert-True 'README explains guided prerequisite recovery' ($readme -match '(?is)virtualization.*WSL.*Docker.*resume')
 Assert-True 'README links current candidate notes' ($readme -match 'docs/releases/0\.2\.0-rc1\.md')
 Assert-True 'support documents in-app diagnostics' ($support -match '(?is)Start Menu.*Diagnostics')
 Assert-True 'support names current candidate' ($support -match '0\.2\.0-rc1')
-Assert-True 'security names canonical product' ($security -match '^# AFK LocalAI security policy')
+Assert-True 'security names canonical product' ($security -match '^# AFK AI security policy')
 Assert-True 'installer guide documents native shell' ($installer -match '(?is)AFKLocalAI\.exe.*Inno Setup')
 Assert-True 'installer guide documents deterministic payload' ($installer -match 'payload-manifest\.json')
-Assert-True 'docs index uses canonical product name' ($docs -match '^# AFK LocalAI documentation')
+Assert-True 'docs index uses canonical product name' ($docs -match '^# AFK AI documentation')
 Assert-True 'current release notes exist' (Test-Path -LiteralPath $releasePath -PathType Leaf)
 Assert-True 'lifecycle guide exists' (Test-Path -LiteralPath $lifecyclePath -PathType Leaf)
 if (Test-Path -LiteralPath $releasePath) {

@@ -1,4 +1,4 @@
-# AFK LocalAI documentation
+# AFK AI documentation
 
 This directory contains release records, product contracts, design records, and
 focused technical guides for AFK AI for Windows.

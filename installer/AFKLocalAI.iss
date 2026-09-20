@@ -32,9 +32,9 @@ AppName=AFK LocalAI
 AppVersion={#AppVersion}
 AppVerName=AFK LocalAI {#AppVersion}
 AppPublisher=AFK
-AppPublisherURL=https://github.com/allusionsafk/localai-windows-starter
-AppSupportURL=https://github.com/allusionsafk/localai-windows-starter/issues/new/choose
-AppUpdatesURL=https://github.com/allusionsafk/localai-windows-starter/releases
+AppPublisherURL=https://github.com/allusionsafk/afk-ai
+AppSupportURL=https://github.com/allusionsafk/afk-ai/issues/new/choose
+AppUpdatesURL=https://github.com/allusionsafk/afk-ai/releases
 VersionInfoVersion={#FileVersion}
 VersionInfoCompany=AFK
 VersionInfoDescription=AFK LocalAI Windows Setup ({#Channel}, {#SourceCommit})
@@ -81,7 +81,7 @@ Name: "{group}\AFK LocalAI"; Filename: "{app}\AFKLocalAI.exe"; WorkingDir: "{app
 Name: "{group}\Diagnostics"; Filename: "{app}\AFKLocalAI.exe"; Parameters: "--diagnostics"; WorkingDir: "{app}"
 Name: "{group}\Data Folder"; Filename: "{app}\AFKLocalAI.exe"; Parameters: "--data-folder"; WorkingDir: "{app}"
 Name: "{group}\About AFK LocalAI"; Filename: "{app}\AFKLocalAI.exe"; Parameters: "--about"; WorkingDir: "{app}"
-Name: "{group}\Support"; Filename: "https://github.com/allusionsafk/localai-windows-starter/issues/new/choose"
+Name: "{group}\Support"; Filename: "https://github.com/allusionsafk/afk-ai/issues/new/choose"
 Name: "{group}\Uninstall AFK LocalAI"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\AFK LocalAI"; Filename: "{app}\AFKLocalAI.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 

@@ -6,21 +6,21 @@ product
 
 ## Users
 
-AFK LocalAI is for Windows users who want a private, capable local AI workspace
+AFK AI is for Windows users who want a private, capable local AI workspace
 without becoming Docker, WSL, PowerShell, Python, or model-serving experts.
-Friend Beta users may be willing to report rough edges, but they should still be
+AFK AI Beta users may be willing to report rough edges, but they should still be
 able to download one installer, follow ordinary application prompts, and reach a
 working chat experience without developer knowledge.
 
 The primary workflow is installing and starting local AI safely. During first
-run, the user needs to understand whether their PC is ready, what AFK LocalAI is
+run, the user needs to understand whether their PC is ready, what AFK AI is
 doing, and exactly one next action when Windows or a runtime blocks progress.
 After setup, the main job is opening chat and checking or repairing local
 services when necessary.
 
 ## Product Purpose
 
-AFK LocalAI turns a complex local stack—Ollama, Docker Desktop, WSL, Open WebUI,
+AFK AI turns a complex local stack—Ollama, Docker Desktop, WSL, Open WebUI,
 search, voice, and hardware-fit models—into normal Windows software. Success is
 one trustworthy `.exe`, a calm resumable setup, a clear usable-state gate, and a
 daily launcher that keeps terminals and implementation details out of the normal

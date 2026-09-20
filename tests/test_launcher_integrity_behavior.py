@@ -42,7 +42,7 @@ def test_remote_bootstrap_comes_from_an_immutable_commit() -> None:
 
     assert re.fullmatch(r"[0-9a-f]{40}", commit)
     assert url == (
-        "https://raw.githubusercontent.com/allusionsafk/localai-windows-starter/"
+        "https://raw.githubusercontent.com/allusionsafk/afk-ai/"
         "%BOOTSTRAP_COMMIT%/installer/bootstrap.ps1"
     )
     assert "/master/" not in _text()

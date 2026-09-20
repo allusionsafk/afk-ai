@@ -1,4 +1,4 @@
-# AFK LocalAI security policy
+# AFK AI security policy
 
 AFK AI is Beta software. Please report security or privacy problems that could
 affect the installer, local service boundary, diagnostics, updates, download
@@ -8,7 +8,7 @@ integrity, or user data.
 
 Use GitHub private vulnerability reporting:
 
-https://github.com/allusionsafk/localai-windows-starter/security/advisories/new
+https://github.com/allusionsafk/afk-ai/security/advisories/new
 
 > [!CAUTION]
 > Do not publish exploit details, credentials, private logs, chat content,

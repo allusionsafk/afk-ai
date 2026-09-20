@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "localai"
 version = "0.2.0rc1"
-description = "Python orchestration layer for the public AFK LocalAI Windows distribution."
+description = "Python orchestration layer for the public AFK AI Windows distribution."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

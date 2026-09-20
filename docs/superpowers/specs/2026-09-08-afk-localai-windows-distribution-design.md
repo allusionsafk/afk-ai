@@ -2,7 +2,7 @@
 
 **Status:** Approved for autonomous Friend Beta release-candidate implementation
 **Version target:** `0.2.0-rc1`
-**Public repository:** `allusionsafk/localai-windows-starter`
+**Public repository:** `allusionsafk/afk-ai`
 
 ## Outcome
 

@@ -1,17 +1,17 @@
 name: Installation / setup problem
-description: Report a Friend Beta install, prerequisite, Docker, WSL, or resume failure.
+description: Report an AFK AI Beta install, prerequisite, Docker, WSL, or resume failure.
 title: "[install] "
 labels: []
 body:
   - type: markdown
     attributes:
       value: |
-        AFK AI is Friend Beta software. Please remove credentials, tokens, chats, prompts, documents, private paths, and unrelated machine information before posting.
+        AFK AI is Beta software. Please remove credentials, tokens, chats, prompts, documents, private paths, and unrelated machine information before posting.
   - type: input
     id: version
     attributes:
       label: AFK AI version or commit
-      description: For the current public Friend Beta, this is usually v0.1.7rc1.
+      description: For the current public AFK AI Beta, this is usually v0.1.7rc1.
       placeholder: v0.1.7rc1
     validations:
       required: true

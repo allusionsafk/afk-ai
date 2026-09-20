@@ -1,6 +1,6 @@
 # Contributing to AFK AI
 
-AFK AI is still qualifying its Windows Friend Beta. Contributions should improve the supported path without broadening claims beyond what has been tested.
+The Windows AFK AI Beta is still being qualified. Contributions should improve the supported path without broadening claims beyond what has been tested.
 
 ## Keep changes focused
 
