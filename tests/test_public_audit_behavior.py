@@ -13,7 +13,7 @@ from localai.public_audit import (
 # Built at runtime so public-audit -Strict does not flag its own fixtures:
 # the audit scans tracked source lines for the literal owner marker.
 OWNER = "allusion" + "safk"
-ORIGIN = (OWNER, "localai-windows-starter")
+ORIGIN = (OWNER, "afk-ai")
 
 
 def make_finding(kind: str, file: str, text: str, line: int = 1) -> Finding:
@@ -25,7 +25,7 @@ def test_origin_url_self_reference_is_allowed() -> None:
         make_finding(
             "Origin GitHub owner",
             "README.md",
-            "https://github.com/allusionsafk/localai-windows-starter/releases/latest",
+            f"https://github.com/{OWNER}/afk-ai/releases/latest",
         )
     ]
     kept, allowed = partition_self_references(findings, ORIGIN)
@@ -34,6 +34,32 @@ def test_origin_url_self_reference_is_allowed() -> None:
 
 
 def test_public_companion_site_repo_is_allowed() -> None:
+    findings = [
+        make_finding(
+            "Origin GitHub owner",
+            ".github/ISSUE_TEMPLATE/config.yml",
+            f"https://github.com/{OWNER}/afk-ai-site/issues/new/choose",
+        )
+    ]
+    kept, allowed = partition_self_references(findings, ORIGIN)
+    assert kept == []
+    assert allowed == 1
+
+
+def test_historical_repo_alias_is_allowed_after_rename() -> None:
+    findings = [
+        make_finding(
+            "Origin GitHub owner",
+            "installer/version.json",
+            f"https://github.com/{OWNER}/localai-windows-starter",
+        )
+    ]
+    kept, allowed = partition_self_references(findings, ORIGIN)
+    assert kept == []
+    assert allowed == 1
+
+
+def test_historical_companion_site_alias_is_allowed_after_rename() -> None:
     findings = [
         make_finding(
             "Origin GitHub owner",
