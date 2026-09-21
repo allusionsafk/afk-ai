@@ -223,14 +223,21 @@ def profile_ollama(model_tag: str) -> tuple[ModelProfile, RuntimeProfile]:
     return model, runtime
 
 
-def _one_run(model: str, context: int, *, timeout_sec: float) -> Run:
+def _one_run(
+    model: str,
+    context: int,
+    *,
+    timeout_sec: float,
+    prompt: str = PROMPT,
+    num_predict: int = NUM_PREDICT,
+) -> Run:
     body = {
         "model": model,
-        "prompt": PROMPT,
+        "prompt": prompt,
         "stream": True,
         "options": {
             "num_ctx": context,
-            "num_predict": NUM_PREDICT,
+            "num_predict": num_predict,
             "temperature": 0,
             "seed": 1,
         },
@@ -305,19 +312,47 @@ def _one_run(model: str, context: int, *, timeout_sec: float) -> Run:
 
 
 def benchmark_ollama(
-    model: str, context: int, *, timeout_sec: float = 90
+    model: str,
+    context: int,
+    *,
+    timeout_sec: float = 90,
+    prompt: str = PROMPT,
+    num_predict: int = NUM_PREDICT,
+    prompt_variants: tuple[str, ...] | None = None,
 ) -> Measurement:
-    for _ in range(WARMUPS):
-        warmup = _one_run(model, context, timeout_sec=timeout_sec)
+    if prompt_variants is not None and len(prompt_variants) != WARMUPS + RUNS:
+        raise ValueError("prompt_variants must contain warmup plus measured runs")
+    warmup_seconds: float | None = None
+    for index in range(WARMUPS):
+        warmup = _one_run(
+            model,
+            context,
+            timeout_sec=timeout_sec,
+            prompt=prompt_variants[index] if prompt_variants else prompt,
+            num_predict=num_predict,
+        )
+        warmup_seconds = warmup.total_seconds
         if not warmup.success:
-            return summarize(context, (warmup,))
+            return replace(
+                summarize(context, (warmup,)), warmup_seconds=warmup_seconds
+            )
     runs: list[Run] = []
-    for _ in range(RUNS):
-        result = _one_run(model, context, timeout_sec=timeout_sec)
+    for index in range(RUNS):
+        result = _one_run(
+            model,
+            context,
+            timeout_sec=timeout_sec,
+            prompt=(
+                prompt_variants[WARMUPS + index] if prompt_variants else prompt
+            ),
+            num_predict=num_predict,
+        )
         runs.append(result)
         if not result.success:
             break
-    measured = summarize(context, tuple(runs))
+    measured = replace(
+        summarize(context, tuple(runs)), warmup_seconds=warmup_seconds
+    )
     if not measured.successful:
         return measured
     try:
@@ -355,3 +390,22 @@ def benchmark_ollama(
         )
     except RuntimeError as error:
         return replace(measured, successful=False, error=str(error))
+
+
+def unload_ollama(model: str, *, timeout_sec: float = 30) -> None:
+    """Unload only the named benchmark model and verify it left residency."""
+    _json(
+        "/api/generate",
+        body={"model": model, "keep_alive": 0},
+        timeout=timeout_sec,
+    )
+    deadline = time.perf_counter() + timeout_sec
+    while time.perf_counter() < deadline:
+        loaded = _json("/api/ps")
+        rows = loaded.get("models")
+        if not isinstance(rows, list) or not any(
+            isinstance(item, dict) and item.get("name") == model for item in rows
+        ):
+            return
+        time.sleep(0.1)
+    raise RuntimeError(f"Ollama model did not unload within {timeout_sec:g}s: {model}")

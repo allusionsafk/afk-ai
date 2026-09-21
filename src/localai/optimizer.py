@@ -108,6 +108,9 @@ class Measurement:
     effective_context: int | None = None
     resident_vram_bytes: int | None = None
     resident_total_bytes: int | None = None
+    startup_seconds: float | None = None
+    resident_ram_bytes: int | None = None
+    warmup_seconds: float | None = None
 
 
 @dataclass(frozen=True)
@@ -326,6 +329,9 @@ def validate_measurement(measurement: Measurement, context: int) -> Measurement:
         effective_context=context,
         resident_vram_bytes=measurement.resident_vram_bytes,
         resident_total_bytes=measurement.resident_total_bytes,
+        startup_seconds=measurement.startup_seconds,
+        resident_ram_bytes=measurement.resident_ram_bytes,
+        warmup_seconds=measurement.warmup_seconds,
     )
 
 
@@ -381,6 +387,9 @@ class MeasurementCache:
                 effective_context=entry.effective_context,
                 resident_vram_bytes=entry.resident_vram_bytes,
                 resident_total_bytes=entry.resident_total_bytes,
+                startup_seconds=entry.startup_seconds,
+                resident_ram_bytes=entry.resident_ram_bytes,
+                warmup_seconds=entry.warmup_seconds,
             )
         except (KeyError, TypeError, ValueError, OverflowError):
             return None
