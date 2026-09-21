@@ -249,9 +249,18 @@ def partition_self_references(
     if origin is None:
         return findings, 0
     owner, repo = origin
-    self_ref = re.compile(rf"\b{re.escape(owner)}/{re.escape(repo)}(?![\w-])")
-    companion_site_repo = re.compile(
-        rf"\b{re.escape(owner)}/{re.escape(repo)}-site(?![\w-])"
+    repo_names = [repo]
+    # GitHub redirects this exact former public repository name to afk-ai.
+    # Existing release/support links and its companion site remain public.
+    if owner == "allusion" + "safk" and repo == "afk-ai":
+        repo_names.append("localai-windows-starter")
+    self_refs = tuple(
+        re.compile(rf"\b{re.escape(owner)}/{re.escape(name)}(?![\w-])")
+        for name in repo_names
+    )
+    companion_site_repos = tuple(
+        re.compile(rf"\b{re.escape(owner)}/{re.escape(name)}-site(?![\w-])")
+        for name in repo_names
     )
     # Deliberately anchored to workers.dev: this allows the project's own
     # deployment host, not any string that happens to contain the owner name.
@@ -261,8 +270,10 @@ def partition_self_references(
     allowed = 0
     for finding in findings:
         if finding.kind == "Origin GitHub owner":
-            is_self_url = bool(self_ref.search(finding.text))
-            is_companion_site_repo = bool(companion_site_repo.search(finding.text))
+            is_self_url = any(pattern.search(finding.text) for pattern in self_refs)
+            is_companion_site_repo = any(
+                pattern.search(finding.text) for pattern in companion_site_repos
+            )
             is_self_site = bool(self_site.search(finding.text))
             is_license_copyright = finding.file == "LICENSE" and bool(
                 copyright_line.match(finding.text)

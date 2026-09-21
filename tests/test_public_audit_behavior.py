@@ -46,6 +46,30 @@ def test_public_companion_site_repo_is_allowed() -> None:
     assert allowed == 1
 
 
+def test_renamed_origin_keeps_exact_historical_public_links() -> None:
+    renamed_origin = (OWNER, "afk-ai")
+    findings = [
+        make_finding(
+            "Origin GitHub owner",
+            "README.md",
+            f"https://github.com/{OWNER}/localai-windows-starter/releases",
+        ),
+        make_finding(
+            "Origin GitHub owner",
+            "SUPPORT.md",
+            f"https://github.com/{OWNER}/localai-windows-starter-site/issues",
+        ),
+        make_finding(
+            "Origin GitHub owner",
+            "README.md",
+            f"https://github.com/{OWNER}/localai-windows-starter-other/issues",
+        ),
+    ]
+    kept, allowed = partition_self_references(findings, renamed_origin)
+    assert kept == [findings[2]]
+    assert allowed == 2
+
+
 def test_license_copyright_is_allowed() -> None:
     findings = [
         make_finding(
