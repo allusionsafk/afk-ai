@@ -29,9 +29,12 @@ def test_model_scout_parse_and_fit_moe_candidate() -> None:
     assert scored.active == 3
     assert scored.is_moe
     assert scored.family == "qwen"
-    assert scored.verdict == "Good"
+    # ~21GB of weights does not fit a 12GB card. Being MoE makes the spill
+    # cheap, not absent, so the honest verdict is "OK" rather than "Good".
+    # (This asserted "Good" while the MoE branch skipped the VRAM comparison.)
+    assert scored.verdict == "OK"
     assert scored.size_gb == 21
-    assert scored.score > 170
+    assert scored.score > 130
 
 
 def test_model_scout_special_purpose_models_are_deprioritized() -> None:
@@ -731,6 +734,25 @@ def _dense_9b() -> model_scout.Candidate:
     return model_scout.parse_model("Qwen/Qwen3.5-9B-GGUF")
 
 
+def _candidate(
+    *, total: float, active: float | None, is_moe: bool
+) -> model_scout.Candidate:
+    """A synthetic candidate, so a fit test states only the numbers it is about."""
+    label = f"{total:g}B-A{active:g}B" if active else f"{total:g}B"
+    return model_scout.Candidate(
+        id=f"synthetic/{label}",
+        author="synthetic",
+        name=label,
+        total=total,
+        active=active,
+        is_moe=is_moe,
+        kind="general",
+        reasoning=False,
+        family="qwen",
+        parse_warning=None,
+    )
+
+
 def test_category_fit_daily_driver_good_at_q8_32k() -> None:
     # The reference box: qwen3.5:9b q4 @32k on 12GB VRAM with q8_0 KV cache is
     # the known-good daily driver. weights 5.4 + KV 2.56 + 1.5 overhead = 9.46.
@@ -788,8 +810,16 @@ def test_category_fit_moe_rejected_when_weights_exceed_ram() -> None:
     assert fit.verdict == "TooBig"
 
 
-def test_category_fit_moe_good_when_weights_fit_ram() -> None:
-    # A 35B-A3B (~21GB weights) fits 32GB RAM and runs fast on CPU offload.
+def test_category_fit_moe_that_does_not_fit_vram_is_not_good() -> None:
+    # A 35B-A3B is ~21GB of weights. It fits 32GB RAM, and its 3B active
+    # parameters make CPU offload cheap - but it does NOT fit a 12GB card, so it
+    # is "OK" (spills, tolerably), never "Good".
+    #
+    # This previously asserted "Good", which made "Good" mean two different
+    # things: "resident in VRAM" on the dense path and "loads and runs
+    # acceptably" on the MoE path. Both verdicts feed one comparable score, so
+    # the scout ranked a model that could not fit above a dense model that
+    # spilled exactly as far.
     moe = model_scout.parse_model("unsloth/Qwen3.6-35B-A3B-GGUF")
     fit = model_scout.category_fit(
         moe,
@@ -798,7 +828,77 @@ def test_category_fit_moe_good_when_weights_fit_ram() -> None:
         parallel=1,
         kv_factor=0.5,
     )
+    assert fit.verdict == "OK"
+    assert fit.weights_gb + fit.kv_gb > 12 - model_scout.VRAM_OVERHEAD_GB
+    assert "spills to CPU" in fit.why
+
+
+def test_category_fit_moe_is_good_when_it_actually_fits_vram() -> None:
+    # The other half of the contract: MoE is not penalised either. An 8B-A1B is
+    # ~4.8GB of weights and genuinely fits a 12GB card, so it is "Good".
+    moe = model_scout.parse_model("unsloth/Qwen3.6-8B-A1B-GGUF")
+    assert moe.is_moe
+    fit = model_scout.category_fit(
+        moe,
+        model_scout.Budget(ram_gb=32, vram_gb=12, disk_free_gb=200),
+        ctx=8192,
+        parallel=1,
+        kv_factor=0.5,
+    )
     assert fit.verdict == "Good"
+    assert fit.weights_gb + fit.kv_gb <= 12 - model_scout.VRAM_OVERHEAD_GB
+
+
+def test_category_fit_moe_and_dense_agree_on_whether_it_fits_vram() -> None:
+    # Active parameters change compute per token, not the resident footprint.
+    # Two models with the same weights must never disagree about fitting VRAM.
+    budget = model_scout.Budget(ram_gb=32, vram_gb=12, disk_free_gb=200)
+    fits = {"Good"}
+    for total, active in ((30.0, 3.0), (8.0, 1.0)):
+        moe = _candidate(total=total, active=active, is_moe=True)
+        dense = _candidate(total=total, active=None, is_moe=False)
+        moe_fit = model_scout.category_fit(
+            moe, budget, ctx=16384, parallel=1, kv_factor=1.0
+        )
+        dense_fit = model_scout.category_fit(
+            dense, budget, ctx=16384, parallel=1, kv_factor=1.0
+        )
+        assert moe_fit.weights_gb == dense_fit.weights_gb
+        assert (moe_fit.verdict in fits) == (dense_fit.verdict in fits), (
+            f"{total}B: MoE said {moe_fit.verdict}, dense said {dense_fit.verdict}"
+        )
+
+
+def test_category_fit_moe_still_outranks_dense_when_both_spill() -> None:
+    # The real MoE advantage, preserved: when neither fits, the low-active model
+    # reads far fewer weights per token, so it must still score higher.
+    budget = model_scout.Budget(ram_gb=32, vram_gb=12, disk_free_gb=200)
+    moe = _candidate(total=30.0, active=3.0, is_moe=True)
+    dense = _candidate(total=30.0, active=None, is_moe=False)
+    moe_fit = model_scout.category_fit(
+        moe, budget, ctx=16384, parallel=1, kv_factor=1.0
+    )
+    dense_fit = model_scout.category_fit(
+        dense, budget, ctx=16384, parallel=1, kv_factor=1.0
+    )
+    assert moe_fit.verdict == "OK"
+    assert dense_fit.verdict == "Tight"
+    moe_score = model_scout.score_candidate(
+        replace(moe, verdict=moe_fit.verdict)
+    ).score
+    dense_score = model_scout.score_candidate(
+        replace(dense, verdict=dense_fit.verdict)
+    ).score
+    assert moe_score > dense_score
+
+
+def test_category_fit_moe_with_many_active_params_gets_no_offload_credit() -> None:
+    # A high-active MoE offloads about as painfully as a dense model, so it does
+    # not get the cheaper-spill verdict.
+    budget = model_scout.Budget(ram_gb=32, vram_gb=12, disk_free_gb=200)
+    chunky = _candidate(total=30.0, active=20.0, is_moe=True)
+    fit = model_scout.category_fit(chunky, budget, ctx=16384, parallel=1, kv_factor=1.0)
+    assert fit.verdict == "Tight"
 
 
 def test_category_fit_reports_ctx_in_why_and_kv() -> None:
@@ -995,3 +1095,48 @@ def test_read_scout_groups_roundtrips(
     assert data is not None
     assert data["generated"].startswith("2026-07-08")
     assert set(data["groups"]) == {c.id for c in scout_categories.CATEGORIES}
+
+
+def test_fit_candidate_moe_does_not_claim_to_fit_vram_it_misses() -> None:
+    # The discovery pass (apply_fit -> fit_candidate) ranks and de-duplicates
+    # every candidate before the per-category pass runs, so the same residency
+    # rule has to hold here: a 30B-A3B is ~18GB of weights and does not fit a
+    # 12GB card, whatever its active parameter count.
+    budget = model_scout.Budget(ram_gb=32, vram_gb=12, disk_free_gb=200)
+    verdict, size, why = model_scout.fit_candidate(
+        _candidate(total=30.0, active=3.0, is_moe=True), budget
+    )
+    assert verdict == "OK"
+    assert size is not None and size > budget.vram_gb - model_scout.VRAM_OVERHEAD_GB
+    assert "spills to CPU" in why
+
+
+def test_fit_candidate_moe_is_good_when_it_fits() -> None:
+    budget = model_scout.Budget(ram_gb=32, vram_gb=12, disk_free_gb=200)
+    verdict, _size, why = model_scout.fit_candidate(
+        _candidate(total=8.0, active=1.0, is_moe=True), budget
+    )
+    assert verdict == "Good"
+    assert "fits fully" in why
+
+
+def test_fit_candidate_moe_and_dense_agree_on_fitting_vram() -> None:
+    budget = model_scout.Budget(ram_gb=32, vram_gb=12, disk_free_gb=200)
+    for total, active in ((30.0, 3.0), (8.0, 1.0)):
+        moe, _s, _w = model_scout.fit_candidate(
+            _candidate(total=total, active=active, is_moe=True), budget
+        )
+        dense, _s2, _w2 = model_scout.fit_candidate(
+            _candidate(total=total, active=None, is_moe=False), budget
+        )
+        assert (moe == "Good") == (dense == "Good"), f"{total}B: {moe} vs {dense}"
+
+
+def test_fit_candidate_uses_the_named_budget_constants() -> None:
+    # The literals in this function had drifted from the module constants, so
+    # editing WEIGHTS_GB_PER_B silently changed nothing on the discovery path.
+    budget = model_scout.Budget(ram_gb=32, vram_gb=12, disk_free_gb=200)
+    _v, size, _w = model_scout.fit_candidate(
+        _candidate(total=10.0, active=None, is_moe=False), budget
+    )
+    assert size == round(10.0 * model_scout.WEIGHTS_GB_PER_B, 1)
