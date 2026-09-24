@@ -479,6 +479,39 @@ finally
     Check("a missing runtime surfaces as a catchable launch failure", threw);
 }
 
+// Status words: the engine's machine states read as plain words with a symbol,
+// and nothing is ever promoted to ready by translation.
+foreach (var (raw, label, tone) in new[]
+{
+    ("READY", "Ready", StatusTone.Ready), ("SUPPORTED", "Supported", StatusTone.Ready),
+    ("DOCKER_HEALTHY_LOCAL", "Ready", StatusTone.Ready), ("DOCKER INSTALLED NOT RUNNING", "Not running", StatusTone.Attention),
+    ("DOCKER_NOT_INSTALLED", "Not installed", StatusTone.Attention), ("WINDOWS_VIRTUALIZATION_REBOOT_REQUIRED", "Restart needed", StatusTone.Attention),
+    ("FIRMWARE_VIRTUALIZATION_DISABLED", "Off in firmware", StatusTone.Blocked), ("UNSUPPORTED_PLATFORM", "Not supported", StatusTone.Blocked),
+    ("NOT_REQUIRED_FOR_CURRENT_HEALTHY_BACKEND", "Not needed", StatusTone.Neutral), ("Checking", "Checking", StatusTone.Working),
+    ("Checked during setup", "At setup", StatusTone.Neutral), ("DOCKER_UNKNOWN", "Unknown", StatusTone.Neutral),
+    ("SOMETHING_NEW", "Unknown", StatusTone.Neutral), ("", "Unknown", StatusTone.Neutral),
+})
+{
+    var shown = StatusPresentation.ForState(raw);
+    Check($"status '{raw}' reads as {label}", shown.Label == label && shown.Tone == tone, $"{shown.Label}/{shown.Tone}");
+    Check($"status '{raw}' carries a symbol, not colour alone", shown.Symbol.Length > 0);
+}
+Check("only a real ready state is shown as ready", StatusPresentation.ForHome(HomeKind.Ready).Tone == StatusTone.Ready &&
+    Enum.GetValues<HomeKind>().Where(kind => kind != HomeKind.Ready).All(kind => StatusPresentation.ForHome(kind).Tone != StatusTone.Ready));
+Check("a start in progress reads as starting, not the stopped state it began from",
+    StatusPresentation.ForHome(HomeKind.Stopped, "start").Label == "Starting");
+Check("other operations keep the observed state word",
+    Enum.GetValues<HomeKind>().All(kind =>
+        StatusPresentation.ForHome(kind, "stop") == StatusPresentation.ForHome(kind) &&
+        StatusPresentation.ForHome(kind, null) == StatusPresentation.ForHome(kind)));
+Check("no operation turns a state into ready",
+    Enum.GetValues<HomeKind>().Where(kind => kind != HomeKind.Ready).All(kind =>
+        StatusPresentation.ForHome(kind, "start").Tone != StatusTone.Ready &&
+        StatusPresentation.ForHome(kind, "open-chat").Tone != StatusTone.Ready));
+Check("console-wrapped engine messages reflow into sentences",
+    StatusPresentation.Reflow(new[] { "AFK AI cannot continue yet.", "Next: open Docker Desktop, then run the", "AFK AI installer again.", "", "Reason follows." })
+        == string.Join(Environment.NewLine, "AFK AI cannot continue yet.", "Next: open Docker Desktop, then run the AFK AI installer again.", "Reason follows."));
+
 Console.WriteLine();
 if (failures.Count > 0)
 {

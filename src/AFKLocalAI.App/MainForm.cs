@@ -38,7 +38,7 @@ public sealed class MainForm : Form
     private bool _userStopped;
     private DateTimeOffset? _lastAutoQualify;
 
-    private readonly Panel _content = new() { Dock = DockStyle.Fill, Padding = new Padding(48, 38, 48, 32) };
+    private readonly Panel _content = new() { Dock = DockStyle.Fill, Padding = new Padding(56, 44, 56, 32) };
 
     // Setup screen.
     private readonly Label _headline = new() { AutoSize = true };
@@ -56,9 +56,13 @@ public sealed class MainForm : Form
     };
     private readonly Button _primary = Theme.Button("Check this PC", primary: true);
     private readonly Button _retry = Theme.Button("Check again");
-    private readonly Label _progressLabel = new() { Text = "Setup progress", AutoSize = true };
+    private readonly LinkLabel _progressLabel = new() { Text = "Show setup details", AutoSize = true };
+    private readonly Label _setupMessage = new() { AutoSize = true, MaximumSize = new Size(720, 0) };
+    private readonly Label _setupStage = new() { AutoSize = true, MaximumSize = new Size(720, 0), Visible = false };
 
     // Home screen.
+    private readonly Label _homeStatus = new() { AutoSize = true };
+    private readonly Label _homeModel = new() { AutoSize = true, Visible = false };
     private readonly Label _homeHeadline = new() { AutoSize = true, AccessibleName = "Product status", AccessibleRole = AccessibleRole.StaticText };
     private readonly Label _homeDetail = new() { AutoSize = true, MaximumSize = new Size(760, 0), AccessibleName = "Status detail" };
     private readonly Label _homeUpdated = new() { AutoSize = true };
@@ -87,8 +91,11 @@ public sealed class MainForm : Form
 
         Text = $"AFK AI  {product.DisplayVersion}";
         Icon = icon;
-        MinimumSize = new Size(980, 650);
-        Size = new Size(1120, 760);
+        // Sizes are design pixels at 100%; a per-monitor-aware window has to scale
+        // them itself, and never open larger than the screen it opens on.
+        var workArea = System.Windows.Forms.Screen.PrimaryScreen?.WorkingArea.Size ?? new Size(int.MaxValue, int.MaxValue);
+        MinimumSize = FitTo(workArea, LogicalToDeviceUnits(new Size(980, 650)));
+        Size = FitTo(workArea, LogicalToDeviceUnits(new Size(1120, 760)));
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = Theme.Background;
         ForeColor = Theme.PrimaryText;
@@ -111,6 +118,7 @@ public sealed class MainForm : Form
         _homeStop.Click += (_, _) => Guard(StopAsync);
         _homeCancel.Click += (_, _) => _operation?.Cancel();
         _homeDiagnostics.Click += (_, _) => Guard(OpenDiagnosticsAsync);
+        _progressLabel.LinkClicked += (_, _) => SetSetupDetails(!_progress.Visible);
         _homeDetailsToggle.LinkClicked += (_, _) =>
         {
             _homeServices.Visible = !_homeServices.Visible;
@@ -137,10 +145,13 @@ public sealed class MainForm : Form
 
     // ------------------------------------------------------------------ shell
 
+    private static Size FitTo(Size bounds, Size size) =>
+        new(Math.Min(bounds.Width, size.Width), Math.Min(bounds.Height, size.Height));
+
     private Control BuildShell()
     {
         var shell = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = Theme.Background };
-        shell.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 236));
+        shell.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 228));
         shell.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         shell.Controls.Add(BuildSidebar(), 0, 0);
         shell.Controls.Add(_content, 1, 0);
@@ -149,19 +160,30 @@ public sealed class MainForm : Form
 
     private Control BuildSidebar()
     {
-        var panel = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Surface, Padding = new Padding(24, 26, 20, 20) };
-        var mark = new PictureBox { Location = new Point(24, 26), Size = new Size(42, 42), AccessibleName = "AFK AI" };
-        mark.Paint += (_, eventArgs) => Theme.PaintWordmark(eventArgs.Graphics, new Rectangle(2, 2, 38, 38));
-        var name = new Label { Text = "AFK AI", AutoSize = true, Location = new Point(78, 28), Font = Theme.Font(13, FontStyle.Bold), ForeColor = Theme.PrimaryText };
-        var version = new Label { Text = $"Beta  {_product.DisplayVersion}", AutoSize = true, Location = new Point(79, 52), Font = Theme.Font(8.5f), ForeColor = Theme.MutedText };
-        panel.Controls.Add(mark);
-        panel.Controls.Add(name);
-        panel.Controls.Add(version);
+        var panel = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Rail, Padding = new Padding(20, 26, 16, 20), Margin = Padding.Empty };
+        panel.Paint += (_, eventArgs) =>
+        {
+            using var pen = new Pen(Theme.RailBorder);
+            eventArgs.Graphics.DrawLine(pen, panel.Width - 1, 0, panel.Width - 1, panel.Height);
+        };
+        // The lockup lays itself out, so the name and channel never overlap at any scale.
+        var lockup = new TableLayoutPanel { AutoSize = true, ColumnCount = 2, RowCount = 2, Location = new Point(20, 26), BackColor = Theme.Rail };
+        lockup.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        lockup.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        var mark = new PictureBox { Size = new Size(36, 36), AccessibleName = "AFK AI", Margin = new Padding(0, 2, 12, 0) };
+        mark.Paint += (_, eventArgs) => Theme.PaintWordmark(eventArgs.Graphics, new Rectangle(1, 1, mark.Width - 3, mark.Height - 3));
+        var name = new Label { Text = "AFK AI", AutoSize = true, Font = Theme.Display(14, FontStyle.Bold), ForeColor = Theme.PrimaryText, Margin = Padding.Empty };
+        var version = new Label { Text = $"Beta · {_product.DisplayVersion}", AutoSize = true, Font = Theme.Font(8.5f), ForeColor = Theme.MutedText, Margin = new Padding(1, 0, 0, 0) };
+        lockup.Controls.Add(mark, 0, 0);
+        lockup.SetRowSpan(mark, 2);
+        lockup.Controls.Add(name, 1, 0);
+        lockup.Controls.Add(version, 1, 1);
+        panel.Controls.Add(lockup);
 
         var navigation = new FlowLayoutPanel
         {
             FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true,
-            Location = new Point(20, 112), Width = 194
+            Location = new Point(12, 132), Width = 200, BackColor = Theme.Rail
         };
         navigation.Controls.Add(SideButton("Home", () => Guard(async () =>
         {
@@ -183,9 +205,13 @@ public sealed class MainForm : Form
 
         var support = SideButton("Support", () => OpenExternal(_product.SupportUrl));
         support.AccessibleName = "Open support";
-        support.Location = new Point(20, 650);
-        support.Anchor = AnchorStyles.Left | AnchorStyles.Bottom;
+        // Placed from the rail's real height: a bottom anchor taken before the rail
+        // is sized keeps the button below the window at every size.
         panel.Controls.Add(support);
+        void PlaceSupport() => support.Location =
+            new Point(navigation.Left, Math.Max(navigation.Bottom, panel.ClientSize.Height - panel.Padding.Bottom - support.Height));
+        panel.Resize += (_, _) => PlaceSupport();
+        PlaceSupport();
         return panel;
     }
 
@@ -193,13 +219,14 @@ public sealed class MainForm : Form
     {
         var button = new Button
         {
-            Text = text, Width = 190, Height = 42, TextAlign = ContentAlignment.MiddleLeft,
-            FlatStyle = FlatStyle.Flat, BackColor = Theme.Surface, ForeColor = Theme.SecondaryText,
-            Font = Theme.Font(10), Cursor = Cursors.Hand, Margin = new Padding(0, 0, 0, 5),
-            AccessibleName = text
+            Text = text, Width = 196, Height = 38, TextAlign = ContentAlignment.MiddleLeft,
+            FlatStyle = FlatStyle.Flat, BackColor = Theme.Rail, ForeColor = Theme.SecondaryText,
+            Font = Theme.Font(10), Cursor = Cursors.Hand, Margin = new Padding(0, 0, 0, 2),
+            Padding = new Padding(8, 0, 0, 0), AccessibleName = text, UseMnemonic = false
         };
         button.FlatAppearance.BorderSize = 0;
         button.FlatAppearance.MouseOverBackColor = Theme.Elevated;
+        button.FlatAppearance.MouseDownBackColor = Theme.SurfaceBorder;
         button.Click += (_, _) => action();
         return button;
     }
@@ -253,27 +280,37 @@ public sealed class MainForm : Form
     {
         _screen = Screen.Home;
         _content.Controls.Clear();
-        _homeHeadline.Font = Theme.Font(25, FontStyle.Bold);
+        _homeStatus.Font = Theme.Font(10, FontStyle.Bold);
+        _homeStatus.Margin = new Padding(2, 0, 0, 6);
+        _homeHeadline.Font = Theme.Display(28, FontStyle.Bold);
         _homeHeadline.ForeColor = Theme.PrimaryText;
+        _homeHeadline.MaximumSize = new Size(760, 0);
         _homeDetail.Font = Theme.Font(11);
         _homeDetail.ForeColor = Theme.SecondaryText;
+        _homeDetail.Margin = new Padding(3, 8, 0, 0);
+        _homeModel.Font = Theme.Mono(9.5f);
+        _homeModel.ForeColor = Theme.SecondaryText;
+        _homeModel.Margin = new Padding(3, 10, 0, 0);
         _homeUpdated.Font = Theme.Font(9);
         _homeUpdated.ForeColor = Theme.MutedText;
-        _homeDetailsToggle.LinkColor = Theme.Accent;
-        _homeDetailsToggle.ActiveLinkColor = Theme.Accent;
+        _homeUpdated.Margin = new Padding(3, 6, 0, 0);
+        _homeDetailsToggle.LinkColor = Theme.Link;
+        _homeDetailsToggle.ActiveLinkColor = Theme.Link;
         _homeDetailsToggle.Font = Theme.Font(9.5f);
-        _homeActivity.BackColor = Theme.Elevated;
+        _homeActivity.BackColor = Theme.Sunken;
         _homeActivity.ForeColor = Theme.SecondaryText;
-        _homeActivity.Font = new Font("Cascadia Mono", 9, FontStyle.Regular, GraphicsUnit.Point);
+        _homeActivity.Font = Theme.Mono(9);
         _homeServices.BackColor = Theme.Surface;
         _homeServices.Padding = new Padding(18, 10, 18, 10);
 
-        var header = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(0, 0, 0, 10) };
+        var header = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(0, 0, 0, 18) };
+        header.Controls.Add(_homeStatus);
         header.Controls.Add(_homeHeadline);
         header.Controls.Add(_homeDetail);
+        header.Controls.Add(_homeModel);
         header.Controls.Add(_homeUpdated);
 
-        var actions = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.LeftToRight, Padding = new Padding(0, 8, 0, 8) };
+        var actions = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.LeftToRight, Padding = new Padding(0, 4, 0, 14) };
         foreach (var button in new[] { _homePrimary, _homeCheck, _homeStop, _homeCancel, _homeDiagnostics }) actions.Controls.Add(button);
 
         var details = new Panel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(0, 6, 0, 6) };
@@ -286,10 +323,12 @@ public sealed class MainForm : Form
 
         var privacy = new Label
         {
-            Text = "Local by default: chat and model traffic stay on this PC unless you change the advanced network settings.",
-            Dock = DockStyle.Bottom, Height = 44, Padding = new Padding(0, 12, 0, 0),
-            ForeColor = Theme.MutedText, Font = Theme.Font(9)
+            Text = "On this PC · Local by default: chat and model traffic stay on this PC unless you change the advanced network settings.",
+            Dock = DockStyle.Bottom, Padding = new Padding(2, LogicalToDeviceUnits(14), 0, 0),
+            ForeColor = Theme.SecondaryText, Font = Theme.Font(9)
         };
+        // Room for two lines at any scale, so a narrow window wraps instead of clipping.
+        privacy.Height = privacy.Padding.Top + 2 * privacy.Font.Height + LogicalToDeviceUnits(6);
 
         _content.Controls.Add(activityHost);
         _content.Controls.Add(details);
@@ -306,13 +345,13 @@ public sealed class MainForm : Form
         var now = DateTimeOffset.UtcNow;
         var view = HomePresenter.Present(_home, now);
         _homeHeadline.Text = IsBusy && _operationName is { } name ? OperationHeadline(name) : view.Headline;
-        _homeHeadline.ForeColor = _home.Kind switch
-        {
-            HomeKind.Ready => Theme.PrimaryText,
-            HomeKind.Degraded or HomeKind.Failed or HomeKind.RepairNeeded => Theme.Failure,
-            _ => Theme.PrimaryText
-        };
+        // The headline stays in ink; the state speaks through a word, a symbol and a tone.
+        var state = StatusPresentation.ForHome(_home.Kind, IsBusy ? _operationName : null);
+        _homeStatus.Text = $"{state.Symbol}  {state.Label}";
+        _homeStatus.ForeColor = Theme.ToneColor(state.Tone);
         _homeDetail.Text = view.Detail;
+        _homeModel.Text = _home.Latest?.Model is { Length: > 0 } model ? $"Model  {model}" : "";
+        _homeModel.Visible = _homeModel.Text.Length > 0;
         _homeUpdated.Text = _home.ObservedAt is { } at ? $"Last checked {at.ToLocalTime():t}" : "";
         _homeAction = view.Primary;
         _homePrimary.Text = view.PrimaryLabel;
@@ -345,8 +384,9 @@ public sealed class MainForm : Form
         {
             var service = services[index];
             _homeServices.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            var shown = StatusPresentation.ForState(service.State);
             _homeServices.Controls.Add(new Label { Text = service.Name, AutoSize = true, ForeColor = Theme.PrimaryText, Font = Theme.Font(9.5f, FontStyle.Bold), Margin = new Padding(0, 4, 24, 4) }, 0, index);
-            _homeServices.Controls.Add(new Label { Text = service.State, AutoSize = true, ForeColor = StatusColor(service.State), Font = Theme.Font(9.5f), Margin = new Padding(0, 4, 24, 4) }, 1, index);
+            _homeServices.Controls.Add(new Label { Text = $"{shown.Symbol}  {shown.Label}", AutoSize = true, ForeColor = Theme.ToneColor(shown.Tone), Font = Theme.Font(9.5f, FontStyle.Bold), Margin = new Padding(0, 4, 24, 4) }, 1, index);
             _homeServices.Controls.Add(new Label { Text = service.Detail, AutoSize = true, ForeColor = Theme.MutedText, Font = Theme.Font(9.5f), Margin = new Padding(0, 4, 0, 4) }, 2, index);
         }
         _homeServices.ResumeLayout();
@@ -600,41 +640,53 @@ public sealed class MainForm : Form
         _refreshTimer.Stop();
         _content.Controls.Clear();
         _headline.Text = _state.SetupCompleted ? "Setup & repair" : "Let’s get this PC ready";
-        _headline.Font = Theme.Font(25, FontStyle.Bold);
+        _headline.Font = Theme.Display(28, FontStyle.Bold);
         _headline.ForeColor = Theme.PrimaryText;
         _subtitle.Text = "AFK AI checks Windows, virtualization, WSL, Docker, and your hardware before it downloads anything large.";
         _subtitle.Font = Theme.Font(11);
         _subtitle.ForeColor = Theme.SecondaryText;
+        _subtitle.Margin = new Padding(3, 8, 0, 0);
 
         _status.AccessibleName = "Prerequisite status";
         _status.BackColor = Theme.Surface;
-        _status.Padding = new Padding(22, 16, 22, 16);
+        _status.Dock = DockStyle.Fill;
+        _status.ColumnCount = 4;
         _status.ColumnStyles.Clear();
+        _status.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 30));
+        _status.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
         _status.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 190));
-        _status.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 128));
         _status.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         SetStatusRows(new Dictionary<string, string> { ["Windows"] = "Checking", ["Virtualization"] = "Checking", ["WSL"] = "Checking", ["Docker"] = "Checking", ["Hardware"] = "Pending" });
 
-        _progress.BackColor = Theme.Elevated;
+        _setupMessage.Font = Theme.Font(11);
+        _setupMessage.ForeColor = Theme.PrimaryText;
+        _setupMessage.Text = "Checking this PC…";
+        _setupStage.Font = Theme.Font(10);
+        _setupStage.ForeColor = Theme.SecondaryText;
+        _progress.BackColor = Theme.Sunken;
         _progress.ForeColor = Theme.SecondaryText;
-        _progress.Font = new Font("Cascadia Mono", 9, FontStyle.Regular, GraphicsUnit.Point);
-        _progressLabel.Font = Theme.Font(9, FontStyle.Bold);
-        _progressLabel.ForeColor = Theme.MutedText;
+        _progress.Font = Theme.Mono(9);
+        _progressLabel.Font = Theme.Font(9.5f);
+        _progressLabel.LinkColor = _progressLabel.ActiveLinkColor = Theme.Link;
         _progress.Text = "Waiting for the prerequisite check…";
         _setupDownload.Visible = false;
 
-        var header = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 105, FlowDirection = FlowDirection.TopDown, WrapContents = false };
+        var header = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(0, 0, 0, 22) };
         header.Controls.Add(_headline);
         header.Controls.Add(_subtitle);
-        var statusHost = new Panel { Dock = DockStyle.Top, Height = 250, Padding = new Padding(0, 6, 0, 20) };
-        statusHost.Controls.Add(_status);
-        var progressHost = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 14, 0, 70) };
+        var statusSurface = new SurfacePanel { Dock = DockStyle.Fill, Padding = new Padding(18, 12, 18, 12) };
+        statusSurface.Controls.Add(_status);
+        var statusHost = new Panel { Dock = DockStyle.Top, Height = 234, Padding = new Padding(0, 0, 0, 22) };
+        statusHost.Controls.Add(statusSurface);
+        var messageHost = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(0, 0, 0, 10) };
+        messageHost.Controls.Add(_setupMessage);
+        messageHost.Controls.Add(_setupStage);
+        var progressHost = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 6, 0, 16) };
         progressHost.Controls.Add(_progress);
         progressHost.Controls.Add(_setupDownload);
-        progressHost.Controls.Add(_progressLabel);
-        _progressLabel.Dock = DockStyle.Top;
-        _progressLabel.Padding = new Padding(0, 0, 0, 8);
-        var actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 58, FlowDirection = FlowDirection.LeftToRight };
+        SetSetupDetails(false);
+        // The next step sits right under the message that explains it.
+        var actions = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.LeftToRight, Padding = new Padding(0, 8, 0, 6) };
         actions.Controls.Add(_primary);
         actions.Controls.Add(_retry);
         var diagnostics = Theme.Button("Diagnostics");
@@ -642,11 +694,25 @@ public sealed class MainForm : Form
         diagnostics.Click += (_, _) => Guard(OpenDiagnosticsAsync);
         actions.Controls.Add(diagnostics);
 
+        var detailsToggle = new Panel { Dock = DockStyle.Top, Height = 34 };
+        detailsToggle.Controls.Add(_progressLabel);
+        _progressLabel.Location = new Point(0, 8);
+
+        // Docked top controls stack in reverse order of adding.
         _content.Controls.Add(progressHost);
+        _content.Controls.Add(detailsToggle);
+        _content.Controls.Add(actions);
+        _content.Controls.Add(messageHost);
         _content.Controls.Add(statusHost);
         _content.Controls.Add(header);
-        _content.Controls.Add(actions);
         AcceptButton = _primary;
+    }
+
+    /// <summary>The engine's full log is one click away; it opens by itself while setup runs.</summary>
+    private void SetSetupDetails(bool visible)
+    {
+        _progress.Visible = visible;
+        _progressLabel.Text = visible ? "Hide setup details" : "Show setup details";
     }
 
     private async Task RefreshPreflightAsync()
@@ -689,6 +755,7 @@ public sealed class MainForm : Form
             ["WSL"] = Component("wsl"), ["Docker"] = Component("docker"), ["Hardware"] = "Checked during setup"
         });
         _progress.Text = string.Join(Environment.NewLine, summary.UserMessage.Concat(new[] { "", $"Reason code: {summary.Code}" }));
+        _setupMessage.Text = StatusPresentation.Reflow(summary.UserMessage);
         if (summary.Overall == "READY")
         {
             _pendingAction = _state.SetupCompleted ? "repair" : "provision";
@@ -748,7 +815,10 @@ public sealed class MainForm : Form
         var operation = BeginOperation(repair ? "repair" : "setup");
         SetBusy(true, repair ? "Repairing AFK AI…" : "Setting up AFK AI…");
         _progress.Clear();
+        SetSetupDetails(true);
         _headline.Text = repair ? "Repairing AFK AI" : "Setting up AFK AI";
+        _setupMessage.Text = "This takes a while the first time: AFK AI downloads its runtime and a model that fits this PC.";
+        _setupStage.Visible = true;
         ProcessResult? result = null;
         try
         {
@@ -774,6 +844,7 @@ public sealed class MainForm : Form
             EndOperation();
             SetBusy(false);
             _setupDownload.Visible = false;
+            _setupStage.Visible = false;
         }
         if (result is null) return;
 
@@ -805,10 +876,13 @@ public sealed class MainForm : Form
         foreach (var pair in rows)
         {
             _status.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+            var shown = StatusPresentation.ForState(pair.Value);
+            var tone = Theme.ToneColor(shown.Tone);
+            var symbol = new Label { Text = shown.Symbol, AutoSize = true, ForeColor = tone, Font = Theme.Font(11, FontStyle.Bold), Anchor = AnchorStyles.Left };
             var name = new Label { Text = pair.Key, AutoSize = true, ForeColor = Theme.PrimaryText, Font = Theme.Font(10, FontStyle.Bold), Anchor = AnchorStyles.Left };
-            var state = new Label { Text = pair.Value, AutoSize = true, ForeColor = StatusColor(pair.Value), Anchor = AnchorStyles.Left };
+            var state = new Label { Text = shown.Label, AutoSize = true, ForeColor = tone, Font = Theme.Font(10, FontStyle.Bold), Anchor = AnchorStyles.Left, AccessibleName = $"{pair.Key}: {shown.Label}" };
             var detail = new Label { Text = StatusDetail(pair.Key, pair.Value), AutoSize = true, ForeColor = Theme.MutedText, Anchor = AnchorStyles.Left };
-            _status.Controls.Add(name, 0, index); _status.Controls.Add(state, 1, index); _status.Controls.Add(detail, 2, index);
+            _status.Controls.Add(symbol, 0, index); _status.Controls.Add(name, 1, index); _status.Controls.Add(state, 2, index); _status.Controls.Add(detail, 3, index);
             index++;
         }
         _status.ResumeLayout();
@@ -828,7 +902,7 @@ public sealed class MainForm : Form
         "Virtualization" => "Firmware and Windows platform",
         "WSL" => "Only when the Docker backend needs it",
         "Docker" => "Local Linux engine",
-        _ => value == "Pending" ? "Selected after prerequisites" : "Runtime fit"
+        _ => value == "Pending" ? "Chosen after the checks above" : "The model that fits this PC is chosen during setup"
     };
 
     private void SetBusy(bool busy, string? message = null)
@@ -852,6 +926,7 @@ public sealed class MainForm : Form
                 return;
             }
             AppendText(parsed.Message);
+            if (!string.IsNullOrWhiteSpace(parsed.Message)) _setupStage.Text = parsed.Message.Trim();
             return;
         }
         AppendText(line);
@@ -866,6 +941,7 @@ public sealed class MainForm : Form
     private void ShowFailure(string headline, string detail)
     {
         _headline.Text = headline;
+        _setupMessage.Text = detail.Trim();
         _progress.Text = $"{detail.Trim()}\r\n\r\nOpen Diagnostics for the reason code and support-ready details.";
     }
 
@@ -898,7 +974,7 @@ public sealed class MainForm : Form
     private static Label Heading(string text, float size) => new()
     {
         Text = text, AutoSize = true, Dock = DockStyle.Top, Padding = new Padding(0, 0, 0, 12),
-        Font = Theme.Font(size, FontStyle.Bold), ForeColor = Theme.PrimaryText
+        Font = Theme.Display(size, FontStyle.Bold), ForeColor = Theme.PrimaryText
     };
 
     private static Label Body(string text) => new()
