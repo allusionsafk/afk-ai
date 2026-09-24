@@ -91,8 +91,11 @@ public sealed class MainForm : Form
 
         Text = $"AFK AI  {product.DisplayVersion}";
         Icon = icon;
-        MinimumSize = new Size(980, 650);
-        Size = new Size(1120, 760);
+        // Sizes are design pixels at 100%; a per-monitor-aware window has to scale
+        // them itself, and never open larger than the screen it opens on.
+        var workArea = System.Windows.Forms.Screen.PrimaryScreen?.WorkingArea.Size ?? new Size(int.MaxValue, int.MaxValue);
+        MinimumSize = FitTo(workArea, LogicalToDeviceUnits(new Size(980, 650)));
+        Size = FitTo(workArea, LogicalToDeviceUnits(new Size(1120, 760)));
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = Theme.Background;
         ForeColor = Theme.PrimaryText;
@@ -141,6 +144,9 @@ public sealed class MainForm : Form
     }
 
     // ------------------------------------------------------------------ shell
+
+    private static Size FitTo(Size bounds, Size size) =>
+        new(Math.Min(bounds.Width, size.Width), Math.Min(bounds.Height, size.Height));
 
     private Control BuildShell()
     {
@@ -199,9 +205,13 @@ public sealed class MainForm : Form
 
         var support = SideButton("Support", () => OpenExternal(_product.SupportUrl));
         support.AccessibleName = "Open support";
-        support.Location = new Point(20, 650);
-        support.Anchor = AnchorStyles.Left | AnchorStyles.Bottom;
+        // Placed from the rail's real height: a bottom anchor taken before the rail
+        // is sized keeps the button below the window at every size.
         panel.Controls.Add(support);
+        void PlaceSupport() => support.Location =
+            new Point(navigation.Left, Math.Max(navigation.Bottom, panel.ClientSize.Height - panel.Padding.Bottom - support.Height));
+        panel.Resize += (_, _) => PlaceSupport();
+        PlaceSupport();
         return panel;
     }
 
@@ -314,9 +324,11 @@ public sealed class MainForm : Form
         var privacy = new Label
         {
             Text = "On this PC · Local by default: chat and model traffic stay on this PC unless you change the advanced network settings.",
-            Dock = DockStyle.Bottom, Height = 44, Padding = new Padding(2, 14, 0, 0),
+            Dock = DockStyle.Bottom, Padding = new Padding(2, LogicalToDeviceUnits(14), 0, 0),
             ForeColor = Theme.SecondaryText, Font = Theme.Font(9)
         };
+        // Room for two lines at any scale, so a narrow window wraps instead of clipping.
+        privacy.Height = privacy.Padding.Top + 2 * privacy.Font.Height + LogicalToDeviceUnits(6);
 
         _content.Controls.Add(activityHost);
         _content.Controls.Add(details);
@@ -334,7 +346,7 @@ public sealed class MainForm : Form
         var view = HomePresenter.Present(_home, now);
         _homeHeadline.Text = IsBusy && _operationName is { } name ? OperationHeadline(name) : view.Headline;
         // The headline stays in ink; the state speaks through a word, a symbol and a tone.
-        var state = StatusPresentation.ForHome(_home.Kind);
+        var state = StatusPresentation.ForHome(_home.Kind, IsBusy ? _operationName : null);
         _homeStatus.Text = $"{state.Symbol}  {state.Label}";
         _homeStatus.ForeColor = Theme.ToneColor(state.Tone);
         _homeDetail.Text = view.Detail;

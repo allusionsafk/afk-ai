@@ -74,4 +74,12 @@ public static class StatusPresentation
         HomeKind.Failed => new("×", "Not working", StatusTone.Blocked),
         _ => new("?", "Unknown", StatusTone.Neutral)
     };
+
+    /// <summary>
+    /// The state word while Home may be running an operation. A start in progress
+    /// reads "Starting", not the "Stopped" its last check saw; every other operation
+    /// keeps the observed state, so the word never claims more than the engine said.
+    /// </summary>
+    public static StatusText ForHome(HomeKind kind, string? operation) =>
+        ForHome(operation == "start" ? HomeKind.Starting : kind);
 }
