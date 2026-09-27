@@ -153,6 +153,9 @@ DEFAULT_SAMPLING = "PARAMETER temperature 0.6\nPARAMETER top_p 0.9"
 WEIGHTS_GB_PER_B = 0.6  # ~q4 bytes-per-param heuristic, matched to fit_candidate.
 VRAM_OVERHEAD_GB = 1.5  # CUDA context + activations headroom.
 RAM_HEADROOM_GB = 5  # OS + Docker/WSL working set kept off the model budget.
+# Above this, a dense model spilling to CPU stops being merely slow. Only used
+# by the flat-8k discovery pass; category_fit compares against the RAM ceiling.
+DENSE_SPILL_CEILING_GB = 18
 # GB of KV cache per 1k tokens (f16), bucketed by TOTAL params - KV grows with
 # layer count, which tracks total size (MoE included: bucket by total, not
 # active). Conservative modern-GQA estimates; the daily-driver anchor test pins
@@ -974,35 +977,53 @@ def category_fit(
             "TooBig", weights, kv, f"~{format_num(weights)}GB weights > RAM budget"
         )
 
+    # "Good" means one thing on every path: weights + KV are resident in VRAM.
+    # Being MoE does not shrink that demand - low ACTIVE parameters cut the
+    # compute per token, but every expert weight still has to be somewhere. So
+    # the VRAM test is identical for MoE and dense; what MoE legitimately buys is
+    # a cheaper SPILL, and that is scored below.
+    moe_detail = ""
     if candidate.is_moe:
-        active = candidate.active
-        verdict = "Good" if active and active <= 6 else "OK"
-        detail = f"~{format_num(active)}B active" if active else "unknown active"
-        why = (
-            f"MoE {detail} + {format_num(kv)}GB KV@{ctx_label} "
-            "= fast even on CPU offload"
+        moe_detail = (
+            f"MoE ~{format_num(candidate.active)}B active, "
+            if candidate.active
+            else "MoE, "
         )
-        return FitEstimate(verdict, weights, kv, why)
+
     if demand <= vram_usable:
         return FitEstimate(
             "Good",
             weights,
             kv,
-            f"~{format_num(weights)}GB + {format_num(kv)}GB KV@{ctx_label} "
-            f"fits {format_num(budget.vram_gb)}GB VRAM",
+            f"{moe_detail}~{format_num(weights)}GB + {format_num(kv)}GB "
+            f"KV@{ctx_label} fits {format_num(budget.vram_gb)}GB VRAM",
         )
     if demand <= ram_ceil:
+        # Past this point the model spills to CPU. A low-active MoE reads far
+        # fewer weights per token than a dense model of the same footprint, so
+        # the offload is genuinely cheaper - "OK" outranks dense's "Tight" in
+        # score_candidate. It is still not "Good": it does not fit VRAM.
+        if candidate.is_moe and candidate.active and candidate.active <= 6:
+            return FitEstimate(
+                "OK",
+                weights,
+                kv,
+                f"{moe_detail}~{format_num(demand)}GB (weights+KV@{ctx_label}) "
+                "spills to CPU, but few active weights = tolerable",
+            )
         return FitEstimate(
             "Tight",
             weights,
             kv,
-            f"~{format_num(demand)}GB (weights+KV@{ctx_label}) spills to CPU = slower",
+            f"{moe_detail}~{format_num(demand)}GB (weights+KV@{ctx_label}) "
+            "spills to CPU = slower",
         )
     return FitEstimate(
         "Poor",
         weights,
         kv,
-        f"~{format_num(demand)}GB (weights+KV@{ctx_label}) = heavy CPU offload",
+        f"{moe_detail}~{format_num(demand)}GB (weights+KV@{ctx_label}) "
+        "= heavy CPU offload",
     )
 
 
@@ -1241,31 +1262,44 @@ def fit_candidate(
 ) -> tuple[str, float | None, str]:
     if candidate.total is None:
         return "Unknown", None, candidate.parse_warning or "WARN: size not in name"
-    size = round(candidate.total * 0.6, 1)
-    ram_ceil = budget.ram_gb - 5
-    vram_usable = budget.vram_gb - 1.5
+    # Use the named constants rather than repeating their values: the literals
+    # here had drifted out of the definitions above, so editing WEIGHTS_GB_PER_B
+    # silently changed nothing on this path.
+    size = round(candidate.total * WEIGHTS_GB_PER_B, 1)
+    ram_ceil = budget.ram_gb - RAM_HEADROOM_GB
+    vram_usable = budget.vram_gb - VRAM_OVERHEAD_GB
     if size > ram_ceil:
         return "TooBig", size, f"~{format_num(size)}GB > RAM budget"
+
+    # Same rule as category_fit: MoE changes compute per token, not residency,
+    # so it gets no discount on the VRAM test. Every expert weight is loaded.
+    moe_detail = ""
     if candidate.is_moe:
-        if candidate.active and candidate.active <= 6:
-            return (
-                "Good",
-                size,
-                "MoE "
-                f"~{format_num(candidate.active)}B active = fast even with CPU offload",
-            )
-        if candidate.active and candidate.active <= 10:
-            return "OK", size, f"MoE ~{format_num(candidate.active)}B active = usable"
-        return "OK", size, "MoE, unknown active"
+        moe_detail = (
+            f"MoE ~{format_num(candidate.active)}B active, "
+            if candidate.active
+            else "MoE, "
+        )
     if size <= vram_usable:
         return (
             "Good",
             size,
-            f"~{format_num(size)}GB fits fully in {budget.vram_gb}GB VRAM",
+            f"{moe_detail}~{format_num(size)}GB fits fully in {budget.vram_gb}GB VRAM",
         )
-    if size <= 18:
-        return "Tight", size, f"~{format_num(size)}GB spills to CPU = slower"
-    return "Poor", size, f"~{format_num(size)}GB dense = heavy CPU offload"
+    # It spills. A low-active MoE reads far fewer weights per token than a dense
+    # model of the same footprint, so the offload is cheaper - but it is still
+    # not resident, so it is never "Good".
+    if candidate.is_moe and candidate.active and candidate.active <= 6:
+        return (
+            "OK",
+            size,
+            f"{moe_detail}~{format_num(size)}GB spills to CPU, "
+            "but few active weights = tolerable",
+        )
+    if size <= DENSE_SPILL_CEILING_GB:
+        why = f"{moe_detail}~{format_num(size)}GB spills to CPU = slower"
+        return "Tight", size, why
+    return "Poor", size, f"{moe_detail}~{format_num(size)}GB = heavy CPU offload"
 
 
 def score_candidate(candidate: Candidate) -> Candidate:
