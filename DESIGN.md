@@ -2,42 +2,49 @@
 
 ## Foundation
 
-AFK LocalAI uses the established Control Center identity: a restrained dark
-desktop utility with cool neutral surfaces and one cyan action color. The native
-shell should feel at home beside Windows 11 settings without imitating system
-chrome. Design serves setup clarity; decoration never outranks status or action.
+AFK LocalAI is a warm workbench: an approachable, local, inspectable place to
+work with a model on this PC. Paper-toned grounds, near-black ink and one ink
+primary action; warmth comes from material and proportion, not from an accent
+colour. It belongs to the Allusions family, whose frame is achromatic, and it
+does not share DemiMedia's dark cinema or ValClips' kinetic look. Design serves
+setup clarity; decoration never outranks status or action.
 
 ## Color
 
-Use these sRGB equivalents in the Windows shell and retain the existing OKLCH
-tokens in the web dashboard:
+The Windows shell uses these sRGB values (`Theme.cs`). The web dashboard keeps its
+existing tokens until it is converged separately.
 
 | Role | Value | Use |
 |---|---:|---|
-| Background | `#17191D` | Main window |
-| Surface | `#202329` | Grouped content and details |
-| Elevated surface | `#292D34` | Active/hover states |
-| Border | `#3B4049` | Full control/group boundaries |
-| Primary text | `#F1F3F5` | Headings and body |
-| Secondary text | `#B8BEC8` | Supporting copy |
-| Muted text | `#939AA6` | Metadata only |
-| Accent | `#38BDF8` | Primary action, focus, selection |
-| Accent ink | `#10212A` | Text on accent |
-| Success | `#55C98D` | Ready/passing state |
-| Warning | `#E5B85A` | Recoverable attention state |
-| Failure | `#E2746B` | Blocking/failure state |
+| Background | `#F8F7F3` | Main window (paper) |
+| Rail | `#EEECE6` | Navigation rail, with a `#D9D7CF` edge |
+| Surface | `#FFFFFF` | Grouped content, with a `#DEDDD7` border |
+| Elevated | `#F0EFE9` | Hover |
+| Sunken | `#F5F3ED` | Logs and details |
+| Border | `#C9C9C2` | Secondary button boundaries |
+| Primary text | `#252622` | Headings and body |
+| Secondary text | `#4E514B` | Supporting copy |
+| Muted text | `#656862` | Metadata only |
+| Action | `#292D2B` | Primary action (white text), hover `#464947` |
+| Link | `#34465B` | Details and support links |
+| Success | `#2F6844` on `#E5EFE5` | Ready/passing state |
+| Warning | `#886028` on `#F6ECD9` | Recoverable attention state |
+| Failure | `#8D4037` on `#FBF0EB` | Blocking/failure state |
 
 Never communicate status with color alone. Each semantic color is paired with a
-plain text state and a familiar symbol. Accent appears on the primary action,
-current step, focus ring, and progress only.
+plain text state and a symbol (✓ ready, … working, ! attention, × blocked,
+– not needed, ? unknown); `StatusPresentation` owns that translation and never
+promotes a state. Headlines stay in ink whatever the state.
 
 ## Typography
 
-Use one system family: `Segoe UI Variable`, falling back to `Segoe UI`. Body text
-is 14 px at 100% scaling, supporting metadata 12–13 px, section titles 16–18 px,
-and the page title 26–30 px. Use regular and semibold weights; avoid display
-fonts, all-caps labels, wide tracking, and fluid type. Long explanations are
-limited to roughly 70 characters per line.
+Use one system family: `Segoe UI Variable` (Display cut for page titles, Text cut
+for everything else), falling back to `Segoe UI`. Body text is 14 px at 100%
+scaling, supporting metadata 12–13 px, section titles 16–18 px, and the page title
+28–30 px. Use regular and semibold weights; avoid all-caps labels, wide tracking,
+and fluid type. Machine values (model names, reason codes, logs) use Cascadia Mono.
+Long explanations are limited to roughly 70 characters per line; engine messages
+are reflowed so they wrap to the window rather than to a console.
 
 ## Layout
 
