@@ -484,6 +484,8 @@ finally
 foreach (var (raw, label, tone) in new[]
 {
     ("READY", "Ready", StatusTone.Ready), ("SUPPORTED", "Supported", StatusTone.Ready),
+    ("NotChecked", "Not checked", StatusTone.Neutral), ("NOT_CHECKED", "Not checked", StatusTone.Neutral),
+    ("LIVE", "Running", StatusTone.Working),
     ("DOCKER_HEALTHY_LOCAL", "Ready", StatusTone.Ready), ("DOCKER INSTALLED NOT RUNNING", "Not running", StatusTone.Attention),
     ("DOCKER_NOT_INSTALLED", "Not installed", StatusTone.Attention), ("WINDOWS_VIRTUALIZATION_REBOOT_REQUIRED", "Restart needed", StatusTone.Attention),
     ("FIRMWARE_VIRTUALIZATION_DISABLED", "Off in firmware", StatusTone.Blocked), ("UNSUPPORTED_PLATFORM", "Not supported", StatusTone.Blocked),
@@ -500,14 +502,16 @@ Check("only a real ready state is shown as ready", StatusPresentation.ForHome(Ho
     Enum.GetValues<HomeKind>().Where(kind => kind != HomeKind.Ready).All(kind => StatusPresentation.ForHome(kind).Tone != StatusTone.Ready));
 Check("a start in progress reads as starting, not the stopped state it began from",
     StatusPresentation.ForHome(HomeKind.Stopped, "start").Label == "Starting");
-Check("other operations keep the observed state word",
+Check("stopping is explicit and idle keeps the observed state word",
     Enum.GetValues<HomeKind>().All(kind =>
-        StatusPresentation.ForHome(kind, "stop") == StatusPresentation.ForHome(kind) &&
+        StatusPresentation.ForHome(kind, "stop").Label == "Stopping" &&
         StatusPresentation.ForHome(kind, null) == StatusPresentation.ForHome(kind)));
 Check("no operation turns a state into ready",
     Enum.GetValues<HomeKind>().Where(kind => kind != HomeKind.Ready).All(kind =>
         StatusPresentation.ForHome(kind, "start").Tone != StatusTone.Ready &&
         StatusPresentation.ForHome(kind, "open-chat").Tone != StatusTone.Ready));
+Check("stopping invalidates the displayed ready word", StatusPresentation.ForHome(HomeKind.Ready, "stop").Tone == StatusTone.Working);
+Check("null message lines preserve remaining guidance", StatusPresentation.Reflow(new string[] { "Check.", null!, "Retry." }) == "Check." + Environment.NewLine + "Retry.");
 Check("console-wrapped engine messages reflow into sentences",
     StatusPresentation.Reflow(new[] { "AFK AI cannot continue yet.", "Next: open Docker Desktop, then run the", "AFK AI installer again.", "", "Reason follows." })
         == string.Join(Environment.NewLine, "AFK AI cannot continue yet.", "Next: open Docker Desktop, then run the AFK AI installer again.", "Reason follows."));

@@ -19,7 +19,9 @@ public static class StatusPresentation
         var value = (raw ?? "").Trim().Replace(' ', '_').ToUpperInvariant();
         return value switch
         {
-            "READY" or "DOCKER_HEALTHY_LOCAL" or "LIVE" => new("✓", "Ready", StatusTone.Ready),
+            "READY" or "DOCKER_HEALTHY_LOCAL" => new("✓", "Ready", StatusTone.Ready),
+            "LIVE" => new("…", "Running", StatusTone.Working),
+            "NOTCHECKED" or "NOT_CHECKED" => new("–", "Not checked", StatusTone.Neutral),
             "SUPPORTED" => new("✓", "Supported", StatusTone.Ready),
             "NOT_REQUIRED_FOR_CURRENT_HEALTHY_BACKEND" or "NOTREQUIRED" or "NOT_REQUIRED" => new("–", "Not needed", StatusTone.Neutral),
             "CHECKING" or "PENDING" or "STARTING" or "DOCKER_STARTING" => new("…", value == "PENDING" ? "Waiting" : value.EndsWith("STARTING") ? "Starting" : "Checking", StatusTone.Working),
@@ -47,12 +49,12 @@ public static class StatusPresentation
     /// previous one unless the previous one ended a sentence, so the words wrap to
     /// the window instead of breaking mid-sentence.
     /// </summary>
-    public static string Reflow(IEnumerable<string> lines)
+    public static string Reflow(IEnumerable<string?>? lines)
     {
         var paragraphs = new List<string>();
-        foreach (var raw in lines)
+        foreach (var raw in lines ?? Array.Empty<string>())
         {
-            var line = raw.Trim();
+            var line = raw?.Trim() ?? "";
             if (line.Length == 0) continue;
             if (paragraphs.Count > 0 && !EndsSentence(paragraphs[^1])) paragraphs[^1] += " " + line;
             else paragraphs.Add(line);
@@ -77,9 +79,10 @@ public static class StatusPresentation
 
     /// <summary>
     /// The state word while Home may be running an operation. A start in progress
-    /// reads "Starting", not the "Stopped" its last check saw; every other operation
+    /// reads "Starting"; a stop reads "Stopping". Every other operation
     /// keeps the observed state, so the word never claims more than the engine said.
     /// </summary>
     public static StatusText ForHome(HomeKind kind, string? operation) =>
+        operation == "stop" ? new("…", "Stopping", StatusTone.Working) :
         ForHome(operation == "start" ? HomeKind.Starting : kind);
 }

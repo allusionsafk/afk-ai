@@ -350,7 +350,7 @@ public sealed class MainForm : Form
         _homeStatus.Text = $"{state.Symbol}  {state.Label}";
         _homeStatus.ForeColor = Theme.ToneColor(state.Tone);
         _homeDetail.Text = view.Detail;
-        _homeModel.Text = _home.Latest?.Model is { Length: > 0 } model ? $"Model  {model}" : "";
+        _homeModel.Text = _home.Latest?.Model is { Length: > 0 } model ? $"Configured model  {model}" : "";
         _homeModel.Visible = _homeModel.Text.Length > 0;
         _homeUpdated.Text = _home.ObservedAt is { } at ? $"Last checked {at.ToLocalTime():t}" : "";
         _homeAction = view.Primary;
