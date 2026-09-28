@@ -11,6 +11,8 @@ Machine-readable output contract (the native shell parses these):
 - ``status --json``        exactly one JSON line (readiness schema 2)
 - ``diagnostics``          one JSON document
 - ``runtime-info``         one JSON line
+- ``utility-report``      one JSON document (hardware, installed fit, recommendation)
+- ``utility-optimize``    one JSON document (estimates and measured evidence)
 - ``start`` / ``pull-model`` ``AFK-EVENT:`` lines while running; ``start`` ends
                             with one ``AFK-STATUS:`` line
 - everything else          human-readable lines
@@ -77,6 +79,15 @@ def _parser() -> argparse.ArgumentParser:
     seed = sub.add_parser("seed-webui", parents=[roots])
     seed.add_argument("--model", required=True)
     seed.add_argument("--num-ctx", type=int, required=True)
+
+    utility_report = sub.add_parser("utility-report", parents=[roots])
+    utility_report.add_argument("--json", action="store_true")
+    utility_report.add_argument("--context", type=int, default=8192)
+    utility_report.add_argument("--enrich", action="store_true")
+
+    utility_optimize = sub.add_parser("utility-optimize", parents=[roots])
+    utility_optimize.add_argument("--model", required=True)
+    utility_optimize.add_argument("--measure", action="store_true")
     return parser
 
 
@@ -166,6 +177,46 @@ def main(argv: Sequence[str]) -> int:
             )
         )
         return EXIT_OK if integrity.intact else EXIT_FAILED
+
+    if command == "utility-report":
+        from localai import product_utility_ollama
+
+        try:
+            report = product_utility_ollama.collect_local_report(
+                configured_model(layout), context=args.context, enrich=args.enrich
+            )
+        except ValueError as error:
+            sys.stderr.write(f"{error}\n")
+            return EXIT_USAGE
+        _print(json.dumps(report, separators=(",", ":")))
+        return EXIT_OK
+
+    if command == "utility-optimize":
+        if not valid_model_tag(args.model):
+            sys.stderr.write("Invalid model name.\n")
+            return EXIT_USAGE
+        from localai import product_utility_ollama
+        from localai.optimizer import MeasurementCache, optimize
+
+        try:
+            hardware = product_utility_ollama.profile_hardware()
+            model, runtime = product_utility_ollama.profile_ollama(args.model)
+            recommendation = optimize(
+                hardware,
+                model,
+                runtime,
+                lambda tag, context: product_utility_ollama.benchmark_ollama(
+                    tag, context, timeout_sec=20, expected_digest=model.digest
+                ),
+                MeasurementCache(layout.state_root / "optimizer-measurements-v1.json"),
+                cap=32768,
+                measure=args.measure,
+            )
+        except (OSError, RuntimeError, ValueError) as error:
+            _print(json.dumps({"schema_version": 1, "error": str(error)[:200]}))
+            return EXIT_FAILED
+        _print(json.dumps(recommendation.to_dict(), separators=(",", ":")))
+        return EXIT_OK
 
     if command == "diagnostics":
         from localai.diagnostics import collect_diagnostics

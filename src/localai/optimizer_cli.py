@@ -49,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
             model,
             runtime,
             lambda tag, context: benchmark_ollama(
-                tag, context, timeout_sec=args.timeout_sec
+                tag, context, timeout_sec=args.timeout_sec, expected_digest=model.digest
             ),
             MeasurementCache(args.cache),
             mode=args.mode,

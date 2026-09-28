@@ -64,6 +64,7 @@ src/localai/product_cli.py
 src/localai/product_config.py
 src/localai/product_runtime.py
 src/localai/product_utility.py
+src/localai/product_utility_ollama.py
 src/localai/public_audit.py
 src/localai/readiness.py
 src/localai/scout_categories.py

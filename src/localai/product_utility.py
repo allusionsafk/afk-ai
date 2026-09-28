@@ -115,7 +115,7 @@ def _fit_row(
     hardware: HardwareProfile,
     model: ModelProfile,
     configured_model: str | None,
-    loaded_models: Mapping[str, str],
+    loaded_models: Mapping[str, str] | None,
     context: int,
 ) -> dict[str, object]:
     weights = model.artifact_bytes if _valid_bytes(model.artifact_bytes) else None
@@ -152,13 +152,19 @@ def _fit_row(
     else:
         verdict, reason = "Unknown", "System RAM capacity is unknown."
     digest = model.digest
-    loaded_digest = loaded_models.get(model.identifier)
+    loaded_digest = (
+        loaded_models.get(model.identifier) if loaded_models is not None else None
+    )
     loaded: bool | None = (
-        loaded_digest == digest
-        if isinstance(digest, str) and digest and isinstance(loaded_digest, str)
-        else False
-        if loaded_digest is None
-        else None
+        None
+        if loaded_models is None
+        else (
+            loaded_digest == digest
+            if isinstance(digest, str) and digest and isinstance(loaded_digest, str)
+            else False
+            if loaded_digest is None
+            else None
+        )
     )
     return {
         "model": model.identifier,
@@ -195,7 +201,7 @@ def build_report(
     hardware: HardwareProfile,
     installed_models: Sequence[ModelProfile],
     configured_model: str | None,
-    loaded_models: Mapping[str, str],
+    loaded_models: Mapping[str, str] | None,
     *,
     context: int,
 ) -> dict[str, object]:

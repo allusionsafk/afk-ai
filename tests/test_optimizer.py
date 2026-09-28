@@ -320,3 +320,82 @@ def test_runtime_residency_is_observation_not_backend(monkeypatch):
     assert result.effective_context == 4096
     assert result.resident_vram_bytes == 100
     assert result.resident_total_bytes == 200
+
+
+def test_optimizer_http_rejects_oversized_runtime_json(monkeypatch):
+    import io
+
+    class Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.close()
+
+    monkeypatch.setattr(
+        optimizer_ollama,
+        "urlopen",
+        lambda *a, **k: Response(b"x" * (4 * 1024 * 1024 + 1)),
+    )
+    with pytest.raises(RuntimeError, match="too large"):
+        optimizer_ollama._json("/api/tags")
+
+
+def test_benchmark_rejects_model_digest_change_before_caching(monkeypatch):
+    run = optimizer.Run(True, 0.5, 0.1, 20, 100.0, 20, 40.0)
+    monkeypatch.setattr(optimizer_ollama, "_one_run", lambda *a, **k: run)
+
+    def fake_json(path, **kwargs):
+        if path == "/api/ps":
+            return {
+                "models": [{"name": "m", "digest": "b" * 64, "context_length": 4096}]
+            }
+        return {"models": [{"name": "m", "digest": "b" * 64}]}
+
+    monkeypatch.setattr(optimizer_ollama, "_json", fake_json)
+    result = optimizer_ollama.benchmark_ollama(
+        "m", 4096, expected_digest="a" * 64
+    )
+    assert not result.successful
+    assert result.error and "digest" in result.error
+
+
+def test_benchmark_stream_refuses_oversized_event(monkeypatch):
+    import io
+
+    class Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.close()
+
+    monkeypatch.setattr(
+        optimizer_ollama,
+        "urlopen",
+        lambda *a, **k: Response(b"x" * (64 * 1024 + 1) + b"\n"),
+    )
+    result = optimizer_ollama._one_run("m", 4096, timeout_sec=1)
+    assert not result.success
+    assert result.error and "too large" in result.error
+
+
+def test_windows_hardware_uses_friendly_cpu_name(monkeypatch):
+    import os
+
+    if os.name != "nt":
+        pytest.skip("Windows registry probe")
+    import winreg
+
+    class Key:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    monkeypatch.setattr(winreg, "OpenKey", lambda *a: Key())
+    monkeypatch.setattr(
+        winreg, "QueryValueEx", lambda *a: ("Intel(R) Core(TM) i9-14900HX", 1)
+    )
+    assert optimizer_ollama._windows_cpu_name() == "Intel(R) Core(TM) i9-14900HX"

@@ -56,6 +56,8 @@ COMMANDS = (
     "pull-model",
     "seed-webui",
     "aliases",
+    "utility-report",
+    "utility-optimize",
 )
 REFUSAL_EXIT = 3
 STOP_REFUSAL_EXIT = 0
