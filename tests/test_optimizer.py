@@ -50,6 +50,12 @@ def test_identity_changes_invalidate_cache(tmp_path, profiles):
     changes = (
         (replace(hardware, cpu="other CPU"), model, runtime),
         (hardware, replace(model, digest="sha256:two"), runtime),
+        (hardware, replace(model, identifier="renamed:latest"), runtime),
+        (hardware, replace(model, quantization="Q8_0"), runtime),
+        (hardware, replace(model, artifact_bytes=5 * optimizer.GIB), runtime),
+        (hardware, replace(model, max_context=32768), runtime),
+        (hardware, replace(model, kv_bytes_per_token=32_768), runtime),
+        (hardware, replace(model, architecture={"block_count": 40}), runtime),
         (hardware, model, replace(runtime, version="0.35.0")),
         (hardware, model, replace(runtime, backend="cuda")),
         (hardware, model, replace(runtime, options={"temperature": 1})),
@@ -62,6 +68,30 @@ def test_identity_changes_invalidate_cache(tmp_path, profiles):
         optimizer.measurement_key(hardware, replace(model, digest=None), runtime, 4096)
         is None
     )
+
+
+def test_ollama_numeric_metadata_rejects_fractional_and_huge_values():
+    assert optimizer_ollama._number(1.5) is None
+    assert optimizer_ollama._number(True) is None
+    assert optimizer_ollama._number(10**100) is None
+    assert optimizer_ollama._number(8192) == 8192
+
+
+def test_architecture_refuses_unbounded_or_unsupported_kv_dimensions():
+    ordinary = {
+        "general.architecture": "llama",
+        "llama.block_count": 32,
+        "llama.attention.head_count_kv": 8,
+        "llama.attention.key_length": 128,
+        "llama.attention.value_length": 128,
+    }
+    assert optimizer_ollama._architecture(ordinary)[1] == 131_072
+    huge = {**ordinary, "llama.block_count": 10**9}
+    assert optimizer_ollama._architecture(huge)[1] is None
+    hybrid = {
+        key.replace("llama", "unknown_hybrid"): value for key, value in ordinary.items()
+    }
+    assert optimizer_ollama._architecture(hybrid)[1] is None
 
 
 def test_cache_corrupt_stale_and_bounded(tmp_path, profiles):

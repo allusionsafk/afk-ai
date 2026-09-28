@@ -158,7 +158,7 @@ def measurement_key(
             "contract": CONTRACT_VERSION,
             "protocol": PROTOCOL_VERSION,
             "hardware": hardware.fingerprint,
-            "model_digest": model.digest,
+            "model": asdict(model),
             "runtime_name": runtime.name,
             "runtime_version": runtime.version,
             "runtime_backend": runtime.backend,

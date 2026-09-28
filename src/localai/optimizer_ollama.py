@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import platform
 import re
@@ -33,14 +34,27 @@ from localai.paths import REPO_ROOT
 from localai.system_info import _memory_status
 
 BASE = "http://127.0.0.1:11434"
+STANDARD_ATTENTION_ARCHITECTURES = frozenset({"llama", "qwen2", "qwen3", "phi3"})
+ARCHITECTURE_LIMITS = {
+    "block_count": 1024,
+    "attention.head_count_kv": 4096,
+    "attention.key_length": 8192,
+    "attention.value_length": 8192,
+    "embedding_length": 1_048_576,
+    "attention.head_count": 4096,
+}
 
 
 def _number(value: object) -> int | None:
     if isinstance(value, bool) or not isinstance(value, (int, float, str)):
         return None
     try:
+        if isinstance(value, float) and (
+            not math.isfinite(value) or not value.is_integer()
+        ):
+            return None
         result = int(value)
-        return result if result > 0 else None
+        return result if 0 < result <= 2**53 - 1 else None
     except (TypeError, ValueError, OverflowError):
         return None
 
@@ -117,7 +131,11 @@ def _architecture(
     info: Mapping[str, object],
 ) -> tuple[int | None, int | None, dict[str, int]]:
     arch = str(info.get("general.architecture") or "")
-    ctx = _number(info.get(f"{arch}.context_length")) if arch else None
+    if not re.fullmatch(r"[a-z][a-z0-9_]{0,31}", arch):
+        return None, None, {}
+    ctx = _number(info.get(f"{arch}.context_length"))
+    if ctx is not None and ctx > 16_777_216:
+        ctx = None
     keys = (
         "block_count",
         "attention.head_count_kv",
@@ -130,6 +148,7 @@ def _architecture(
         key: value
         for key in keys
         if (value := _number(info.get(f"{arch}.{key}"))) is not None
+        and value <= ARCHITECTURE_LIMITS[key]
     }
     layers = fields.get("block_count")
     heads = fields.get("attention.head_count_kv")
@@ -148,7 +167,8 @@ def _architecture(
         value_dim = key_dim
     kv = (
         2 * layers * heads * (key_dim + value_dim)
-        if layers is not None
+        if arch in STANDARD_ATTENTION_ARCHITECTURES
+        and layers is not None
         and heads is not None
         and key_dim is not None
         and value_dim is not None
