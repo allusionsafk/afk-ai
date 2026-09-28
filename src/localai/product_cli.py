@@ -37,6 +37,7 @@ from localai.product_config import (
     ProductLayout,
     configured_model,
     ensure_runtime_config,
+    read_utility_selection,
     resolve_layout,
     valid_model_tag,
 )
@@ -88,6 +89,12 @@ def _parser() -> argparse.ArgumentParser:
     utility_optimize = sub.add_parser("utility-optimize", parents=[roots])
     utility_optimize.add_argument("--model", required=True)
     utility_optimize.add_argument("--measure", action="store_true")
+    utility_use = sub.add_parser("utility-use", parents=[roots])
+    utility_use.add_argument("--model", required=True)
+    utility_apply = sub.add_parser("utility-apply-context", parents=[roots])
+    utility_apply.add_argument("--model", required=True)
+    utility_apply.add_argument("--context", type=int, required=True)
+    utility_apply.add_argument("--override", action="store_true")
     return parser
 
 
@@ -185,6 +192,7 @@ def main(argv: Sequence[str]) -> int:
             report = product_utility_ollama.collect_local_report(
                 configured_model(layout), context=args.context, enrich=args.enrich
             )
+            report["selection"] = read_utility_selection(layout)
         except ValueError as error:
             sys.stderr.write(f"{error}\n")
             return EXIT_USAGE
@@ -215,7 +223,35 @@ def main(argv: Sequence[str]) -> int:
         except (OSError, RuntimeError, ValueError) as error:
             _print(json.dumps({"schema_version": 1, "error": str(error)[:200]}))
             return EXIT_FAILED
-        _print(json.dumps(recommendation.to_dict(), separators=(",", ":")))
+        payload = recommendation.to_dict()
+        payload["user_setting"] = {
+            "configured_model": configured_model(layout),
+            **read_utility_selection(layout),
+        }
+        _print(json.dumps(payload, separators=(",", ":")))
+        return EXIT_OK
+
+    if command in {"utility-use", "utility-apply-context"}:
+        from localai import product_utility_actions
+
+        try:
+            if command == "utility-use":
+                action_result = product_utility_actions.use_installed_model(
+                    layout, args.model
+                )
+            else:
+                action_result = product_utility_actions.apply_context(
+                    layout, args.model, args.context, override=args.override
+                )
+        except ValueError as error:
+            _print(json.dumps({"schema_version": 1, "error": str(error)[:200]}))
+            return EXIT_USAGE
+        except (OSError, RuntimeError) as error:
+            _print(json.dumps({"schema_version": 1, "error": str(error)[:200]}))
+            return EXIT_FAILED
+        _print(
+            json.dumps({"schema_version": 1, **action_result}, separators=(",", ":"))
+        )
         return EXIT_OK
 
     if command == "diagnostics":

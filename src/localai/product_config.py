@@ -42,6 +42,18 @@ INSTALLER_STATE_FILENAME = "installer-state.json"
 # the file is preserved but never interpreted.
 DEFAULT_MODEL_KEY = "AFK_DEFAULT_MODEL"
 SEARXNG_SECRET_KEY = "SEARXNG_SECRET"
+UTILITY_SOURCE_KEY = "AFK_UTILITY_SOURCE_MODEL"
+UTILITY_DIGEST_KEY = "AFK_UTILITY_SOURCE_DIGEST"
+UTILITY_RECOMMENDED_KEY = "AFK_UTILITY_RECOMMENDED_CONTEXT"
+UTILITY_SELECTED_KEY = "AFK_UTILITY_SELECTED_CONTEXT"
+UTILITY_OVERRIDE_KEY = "AFK_UTILITY_OVERRIDE_CONTEXT"
+UTILITY_KEYS = (
+    UTILITY_SOURCE_KEY,
+    UTILITY_DIGEST_KEY,
+    UTILITY_RECOMMENDED_KEY,
+    UTILITY_SELECTED_KEY,
+    UTILITY_OVERRIDE_KEY,
+)
 
 # Values that may be written into the compose env file. Secrets are generated
 # here and never logged; model tags are validated so a hostile or corrupt state
@@ -213,8 +225,45 @@ class ConfigResult:
     removed_legacy_env: bool
 
 
+@dataclass(frozen=True)
+class UtilitySelection:
+    source_model: str
+    source_digest: str
+    recommended_context: int | None
+    selected_context: int | None
+    override_context: int | None
+
+
+def configured_source_model(layout: ProductLayout) -> str | None:
+    source = read_env_file(layout.runtime_env).get(UTILITY_SOURCE_KEY)
+    return source if valid_model_tag(source) else configured_model(layout)
+
+
+def read_utility_selection(layout: ProductLayout) -> dict[str, str | int | None]:
+    values = read_env_file(layout.runtime_env)
+
+    def context(key: str) -> int | None:
+        raw = values.get(key, "")
+        return int(raw) if raw.isdecimal() and 1024 <= int(raw) <= 32768 else None
+
+    source = values.get(UTILITY_SOURCE_KEY)
+    digest = values.get(UTILITY_DIGEST_KEY)
+    return {
+        "source_model": source if valid_model_tag(source) else None,
+        "source_digest": digest
+        if digest and re.fullmatch(r"[a-f0-9]{64}", digest)
+        else None,
+        "recommended_context": context(UTILITY_RECOMMENDED_KEY),
+        "selected_context": context(UTILITY_SELECTED_KEY),
+        "override_context": context(UTILITY_OVERRIDE_KEY),
+    }
+
+
 def ensure_runtime_config(
-    layout: ProductLayout, *, model: str | None = None
+    layout: ProductLayout,
+    *,
+    model: str | None = None,
+    utility: UtilitySelection | None = None,
 ) -> ConfigResult:
     """Create or update ``runtime.env`` without ever losing a value.
 
@@ -226,6 +275,18 @@ def ensure_runtime_config(
     """
     if model is not None and not valid_model_tag(model):
         raise ValueError(f"Refusing to configure invalid model tag {model!r}.")
+    if utility is not None:
+        if not valid_model_tag(utility.source_model) or not re.fullmatch(
+            r"[a-f0-9]{64}", utility.source_digest
+        ):
+            raise ValueError("Invalid Utility model identity.")
+        for ctx in (
+            utility.recommended_context,
+            utility.selected_context,
+            utility.override_context,
+        ):
+            if ctx is not None and (type(ctx) is not int or not 1024 <= ctx <= 32768):
+                raise ValueError("Invalid Utility context.")
 
     current = read_env_file(layout.runtime_env)
     desired = dict(current)
@@ -247,6 +308,17 @@ def ensure_runtime_config(
             desired[DEFAULT_MODEL_KEY] = recorded
         else:
             desired.pop(DEFAULT_MODEL_KEY, None)
+    if utility is not None:
+        for key in UTILITY_KEYS:
+            desired.pop(key, None)
+        desired[UTILITY_SOURCE_KEY] = utility.source_model
+        desired[UTILITY_DIGEST_KEY] = utility.source_digest
+        if utility.recommended_context is not None:
+            desired[UTILITY_RECOMMENDED_KEY] = str(utility.recommended_context)
+        if utility.selected_context is not None:
+            desired[UTILITY_SELECTED_KEY] = str(utility.selected_context)
+        if utility.override_context is not None:
+            desired[UTILITY_OVERRIDE_KEY] = str(utility.override_context)
 
     changed = desired != current
     if changed:

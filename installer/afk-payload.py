@@ -58,6 +58,8 @@ COMMANDS = (
     "aliases",
     "utility-report",
     "utility-optimize",
+    "utility-use",
+    "utility-apply-context",
 )
 REFUSAL_EXIT = 3
 STOP_REFUSAL_EXIT = 0
