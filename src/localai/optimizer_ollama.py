@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import platform
 import re
@@ -33,14 +34,31 @@ from localai.paths import REPO_ROOT
 from localai.system_info import _memory_status
 
 BASE = "http://127.0.0.1:11434"
+MAX_JSON_BYTES = 4 * 1024 * 1024
+MAX_STREAM_EVENT_BYTES = 64 * 1024
+MAX_STREAM_BYTES = 4 * 1024 * 1024
+MAX_STREAM_EVENTS = 4096
+STANDARD_ATTENTION_ARCHITECTURES = frozenset({"llama", "qwen2", "qwen3", "phi3"})
+ARCHITECTURE_LIMITS = {
+    "block_count": 1024,
+    "attention.head_count_kv": 4096,
+    "attention.key_length": 8192,
+    "attention.value_length": 8192,
+    "embedding_length": 1_048_576,
+    "attention.head_count": 4096,
+}
 
 
 def _number(value: object) -> int | None:
     if isinstance(value, bool) or not isinstance(value, (int, float, str)):
         return None
     try:
+        if isinstance(value, float) and (
+            not math.isfinite(value) or not value.is_integer()
+        ):
+            return None
         result = int(value)
-        return result if result > 0 else None
+        return result if 0 < result <= 2**53 - 1 else None
     except (TypeError, ValueError, OverflowError):
         return None
 
@@ -56,12 +74,38 @@ def _json(
     )
     try:
         with urlopen(request, timeout=timeout) as response:
-            value = json.loads(response.read(4 * 1024 * 1024).decode("utf-8"))
+            raw = response.read(MAX_JSON_BYTES + 1)
     except (OSError, ValueError) as error:
+        raise RuntimeError(f"Ollama {path}: {error}") from error
+    if len(raw) > MAX_JSON_BYTES:
+        raise RuntimeError(f"Ollama {path}: response too large")
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, ValueError) as error:
         raise RuntimeError(f"Ollama {path}: {error}") from error
     if not isinstance(value, dict):
         raise RuntimeError(f"Ollama {path}: invalid response")
     return value
+
+
+def _windows_cpu_name() -> str | None:
+    if platform.system() != "Windows":
+        return None
+    try:
+        import winreg
+
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"HARDWARE\DESCRIPTION\System\CentralProcessor\0",
+        ) as key:
+            value, _ = winreg.QueryValueEx(key, "ProcessorNameString")
+    except (OSError, ImportError):
+        return None
+    if not isinstance(value, str) or len(value) > 128 or any(
+        ord(char) < 32 for char in value
+    ):
+        return None
+    return " ".join(value.split()) or None
 
 
 def profile_hardware() -> HardwareProfile:
@@ -92,7 +136,12 @@ def profile_hardware() -> HardwareProfile:
                         free_mib * 1024**2 if free_mib else None,
                     )
                 )
-    cpu = os.environ.get("PROCESSOR_IDENTIFIER") or platform.processor() or None
+    cpu = (
+        _windows_cpu_name()
+        or os.environ.get("PROCESSOR_IDENTIFIER")
+        or platform.processor()
+        or None
+    )
     return HardwareProfile(
         cpu=cpu,
         logical_cores=os.cpu_count(),
@@ -117,7 +166,11 @@ def _architecture(
     info: Mapping[str, object],
 ) -> tuple[int | None, int | None, dict[str, int]]:
     arch = str(info.get("general.architecture") or "")
-    ctx = _number(info.get(f"{arch}.context_length")) if arch else None
+    if not re.fullmatch(r"[a-z][a-z0-9_]{0,31}", arch):
+        return None, None, {}
+    ctx = _number(info.get(f"{arch}.context_length"))
+    if ctx is not None and ctx > 16_777_216:
+        ctx = None
     keys = (
         "block_count",
         "attention.head_count_kv",
@@ -130,6 +183,7 @@ def _architecture(
         key: value
         for key in keys
         if (value := _number(info.get(f"{arch}.{key}"))) is not None
+        and value <= ARCHITECTURE_LIMITS[key]
     }
     layers = fields.get("block_count")
     heads = fields.get("attention.head_count_kv")
@@ -148,7 +202,8 @@ def _architecture(
         value_dim = key_dim
     kv = (
         2 * layers * heads * (key_dim + value_dim)
-        if layers is not None
+        if arch in STANDARD_ATTENTION_ARCHITECTURES
+        and layers is not None
         and heads is not None
         and key_dim is not None
         and value_dim is not None
@@ -179,11 +234,17 @@ def profile_ollama(model_tag: str) -> tuple[ModelProfile, RuntimeProfile]:
     details = shown.get("details")
     details = details if isinstance(details, dict) else {}
     ctx, kv, fields = _architecture(info)
-    digest = row.get("digest")
+    raw_digest = row.get("digest")
+    digest = (
+        raw_digest.lower()
+        if isinstance(raw_digest, str)
+        and re.fullmatch(r"[a-fA-F0-9]{64}", raw_digest)
+        else None
+    )
     version_name = version.get("version")
     model = ModelProfile(
         identifier=model_tag,
-        digest=digest if isinstance(digest, str) and digest else None,
+        digest=digest,
         family=details.get("family")
         if isinstance(details.get("family"), str)
         else None,
@@ -245,7 +306,16 @@ def _one_run(model: str, context: int, *, timeout_sec: float) -> Run:
     final: dict[str, Any] | None = None
     try:
         with urlopen(request, timeout=timeout_sec) as response:
-            for line in response:
+            total_bytes = 0
+            for event_index in range(MAX_STREAM_EVENTS + 1):
+                line = response.readline(MAX_STREAM_EVENT_BYTES + 1)
+                if not line:
+                    break
+                if len(line) > MAX_STREAM_EVENT_BYTES:
+                    raise ValueError("benchmark event too large")
+                total_bytes += len(line)
+                if total_bytes > MAX_STREAM_BYTES or event_index >= MAX_STREAM_EVENTS:
+                    raise ValueError("benchmark stream too large")
                 elapsed = time.perf_counter() - start
                 if elapsed > timeout_sec:
                     raise TimeoutError(f"benchmark exceeded {timeout_sec:g}s")
@@ -305,7 +375,11 @@ def _one_run(model: str, context: int, *, timeout_sec: float) -> Run:
 
 
 def benchmark_ollama(
-    model: str, context: int, *, timeout_sec: float = 90
+    model: str,
+    context: int,
+    *,
+    timeout_sec: float = 90,
+    expected_digest: str | None = None,
 ) -> Measurement:
     for _ in range(WARMUPS):
         warmup = _one_run(model, context, timeout_sec=timeout_sec)
@@ -339,6 +413,30 @@ def benchmark_ollama(
             return replace(
                 measured, successful=False, error="model absent from /api/ps"
             )
+        if expected_digest is not None:
+            loaded_digest = row.get("digest")
+            if loaded_digest != expected_digest:
+                return replace(
+                    measured, successful=False, error="loaded model digest changed"
+                )
+            inventory = _json("/api/tags")
+            tags = inventory.get("models")
+            current = (
+                next(
+                    (
+                        item
+                        for item in tags
+                        if isinstance(item, dict) and item.get("name") == model
+                    ),
+                    None,
+                )
+                if isinstance(tags, list)
+                else None
+            )
+            if current is None or current.get("digest") != expected_digest:
+                return replace(
+                    measured, successful=False, error="model tag digest changed"
+                )
         effective = _number(row.get("context_length"))
         if effective != context:
             return replace(

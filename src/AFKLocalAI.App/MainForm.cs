@@ -10,11 +10,14 @@ public sealed class MainForm : Form
     {
         "Prerequisite status", "Setup progress", "Primary action", "Retry prerequisite check",
         "Open diagnostics", "Open support", "Product status", "Status detail", "Service details",
-        "Activity", "Check again", "Stop AFK AI", "Cancel operation", "Download progress"
+        "Activity", "Check again", "Stop AFK AI", "Cancel operation", "Download progress",
+        "Installed model fit", "Why this model fits", "Use selected installed model",
+        "Optimization evidence", "Measure model performance on this PC",
+        "Apply AFK recommended context", "Apply chosen context as user override"
     };
     public static Type ProcessRunnerType => typeof(HiddenProcessRunner);
 
-    private enum Screen { Setup, Home, About }
+    private enum Screen { Setup, Home, Models, Optimization, About }
 
     private readonly AppPaths _paths;
     private readonly ProductInfo _product;
@@ -37,6 +40,12 @@ public sealed class MainForm : Form
     private bool _autoStartAttempted;
     private bool _userStopped;
     private DateTimeOffset? _lastAutoQualify;
+    private readonly ModelsFitPage _modelsPage = new();
+    private readonly OptimizationPage _optimizationPage = new();
+    private UtilityReport? _utilityReport;
+    private UtilityOptimization? _utilityOptimization;
+    private string? _optimizationModel;
+    private CancellationTokenSource? _utilityOperation;
 
     private readonly Panel _content = new() { Dock = DockStyle.Fill, Padding = new Padding(56, 44, 56, 32) };
 
@@ -125,6 +134,24 @@ public sealed class MainForm : Form
             _homeDetailsToggle.Text = _homeServices.Visible ? "Hide details" : "Show details";
         };
 
+        _modelsPage.RefreshRequested += () => Guard(RefreshModelsAsync);
+        _modelsPage.SetupRequested += () => Guard(async () => { RenderSetup(); await RefreshPreflightAsync(); });
+        _modelsPage.OptimizeRequested += model => Guard(async () =>
+        {
+            _optimizationModel = model;
+            _utilityOptimization = null;
+            RenderOptimization();
+            _optimizationPage.ShowPending(model);
+            await RefreshOptimizationAsync();
+        });
+        _modelsPage.UseRequested += model => Guard(() => UseUtilityModelAsync(model));
+        _modelsPage.CancelRequested += CancelUtilityOperation;
+        _optimizationPage.RefreshRequested += () => Guard(() => RefreshOptimizationAsync());
+        _optimizationPage.MeasureRequested += () => Guard(() => RefreshOptimizationAsync(measure: true));
+        _optimizationPage.ApplyRecommendedRequested += () => Guard(() => ApplyUtilityContextAsync(false, null));
+        _optimizationPage.ApplyOverrideRequested += context => Guard(() => ApplyUtilityContextAsync(true, context));
+        _optimizationPage.CancelRequested += CancelUtilityOperation;
+
         _refreshTimer.Tick += (_, _) => Guard(OnRefreshTickAsync);
         Activated += (_, _) => Guard(OnActivatedAsync);
         FormClosing += OnFormClosing;
@@ -198,6 +225,18 @@ public sealed class MainForm : Form
             RenderSetup();
             await RefreshPreflightAsync();
         })));
+        navigation.Controls.Add(SideButton("Models & fit", () => Guard(async () =>
+        {
+            if (IsBusy) return;
+            RenderModels();
+            await RefreshModelsAsync();
+        })));
+        navigation.Controls.Add(SideButton("Optimization", () => Guard(async () =>
+        {
+            if (IsBusy) return;
+            RenderOptimization();
+            await RefreshOptimizationAsync();
+        })));
         navigation.Controls.Add(SideButton("Diagnostics", () => Guard(OpenDiagnosticsAsync)));
         navigation.Controls.Add(SideButton("Data folder", () => OpenPath(_paths.DataRoot)));
         navigation.Controls.Add(SideButton("About", ShowAbout));
@@ -240,7 +279,11 @@ public sealed class MainForm : Form
         {
             _log.Append("error", "shell", "failure", exception.GetType().Name);
             EndOperation();
-            if (_screen == Screen.Home)
+            if (_screen is Screen.Models or Screen.Optimization)
+            {
+                ShowUtilityError("The Utility view could not finish. Check again.");
+            }
+            else if (_screen == Screen.Home)
             {
                 ApplyObservation(new EngineUnavailable(DateTimeOffset.UtcNow,
                     "Something went wrong while AFK AI was working. Check again, or create a diagnostics report for support.",
@@ -271,6 +314,7 @@ public sealed class MainForm : Form
         // Cancelling kills the whole child process tree, so no engine process is
         // left holding program files open for an update or uninstall.
         _operation?.Cancel();
+        _utilityOperation?.Cancel();
         _lifetime.Cancel();
     }
 
@@ -278,6 +322,7 @@ public sealed class MainForm : Form
 
     private void RenderHome()
     {
+        CancelUtilityOperation();
         _screen = Screen.Home;
         _content.Controls.Clear();
         _homeStatus.Font = Theme.Font(10, FontStyle.Bold);
@@ -632,10 +677,201 @@ public sealed class MainForm : Form
         _homeActivity.AppendText((string.IsNullOrEmpty(_homeActivity.Text) ? "" : Environment.NewLine) + text.Trim());
     }
 
+    // --------------------------------------------------------- Models & fit
+
+    private void RenderModels()
+    {
+        CancelUtilityOperation();
+        _screen = Screen.Models;
+        _refreshTimer.Stop();
+        _content.Controls.Clear();
+        _content.Controls.Add(_modelsPage);
+        AcceptButton = null;
+        if (_utilityReport is not null) _modelsPage.ShowReport(_utilityReport);
+    }
+
+    private void RenderOptimization()
+    {
+        CancelUtilityOperation();
+        _screen = Screen.Optimization;
+        _refreshTimer.Stop();
+        _content.Controls.Clear();
+        _content.Controls.Add(_optimizationPage);
+        AcceptButton = null;
+        if (_utilityOptimization is not null && _optimizationModel is not null)
+            _optimizationPage.ShowOptimization(_optimizationModel, _utilityOptimization,
+                CanApplyUtilityContext(_optimizationModel));
+    }
+
+    private void CancelUtilityOperation() => _utilityOperation?.Cancel();
+
+    private void SetUtilityBusy(bool busy, string message)
+    {
+        if (_screen == Screen.Models) _modelsPage.SetBusy(busy, message);
+        if (_screen == Screen.Optimization) _optimizationPage.SetBusy(busy, message);
+    }
+
+    private void ShowUtilityError(string message) => SetUtilityBusy(false, message);
+
+    private async Task<ProcessResult?> RunUtilityAsync(ProcessSpec spec, TimeSpan timeout)
+    {
+        CancelUtilityOperation();
+        using var operation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        operation.CancelAfter(timeout);
+        _utilityOperation = operation;
+        var outcome = "";
+        SetUtilityBusy(true, spec.Purpose switch
+        {
+            "utility-optimize" when spec.Arguments.Contains("--measure") => "Measuring this PC. You can cancel at any time…",
+            "utility-optimize" => "Checking saved measurements and safe contexts…",
+            "utility-use" or "utility-apply-context" => "Applying your choice…",
+            _ => "Checking local models…"
+        });
+        try
+        {
+            var integrity = await (_integrity ??= Task.Run(() => InstallationIntegrity.Verify(_paths.ProgramRoot)));
+            if (!integrity.Intact)
+            {
+                outcome = "AFK AI's program files need repair. Reinstall AFK AI, then check again.";
+                return null;
+            }
+            var result = await _runner.RunAsync(spec, null, operation.Token);
+            if (!result.Succeeded)
+            {
+                var reason = UtilityError(result.StandardOutput) ??
+                    "The local model service could not finish. Check that AFK AI is running, then try again.";
+                outcome = reason;
+                return null;
+            }
+            return result;
+        }
+        catch (OperationCanceledException) when (!_lifetime.IsCancellationRequested)
+        {
+            outcome = "Cancelled. Check the current setting before trying again.";
+            return null;
+        }
+        finally
+        {
+            if (ReferenceEquals(_utilityOperation, operation))
+            {
+                _utilityOperation = null;
+                SetUtilityBusy(false, outcome);
+            }
+        }
+    }
+
+    private static string? UtilityError(string output)
+    {
+        if (output.Length > 4096) return null;
+        try
+        {
+            using var document = JsonDocument.Parse(output);
+            var root = document.RootElement;
+            if (root.TryGetProperty("error", out var value) && value.ValueKind == JsonValueKind.String)
+            {
+                var detail = value.GetString();
+                return detail is { Length: > 0 and <= 200 } ? detail : null;
+            }
+        }
+        catch (JsonException) { }
+        return null;
+    }
+
+    private async Task<UtilityReport?> FetchUtilityReportAsync()
+    {
+        var result = await RunUtilityAsync(_controller.UtilityReport(), TimeSpan.FromSeconds(20));
+        if (result is null) return null;
+        try { return UtilityJson.ParseReport(result.StandardOutput); }
+        catch (InvalidDataException)
+        {
+            ShowUtilityError("The model service returned an unreadable report. Check again.");
+            return null;
+        }
+    }
+
+    private async Task RefreshModelsAsync()
+    {
+        var report = await FetchUtilityReportAsync();
+        if (report is null || _screen != Screen.Models) return;
+        _utilityReport = report;
+        _modelsPage.ShowReport(report);
+    }
+
+    private async Task RefreshOptimizationAsync(bool measure = false)
+    {
+        if (_screen != Screen.Optimization) return;
+        var report = _utilityReport ?? await FetchUtilityReportAsync();
+        if (report is null || _screen != Screen.Optimization) return;
+        _utilityReport = report;
+        var model = _optimizationModel ?? report.Selection.SourceModel ??
+            report.Models.FirstOrDefault(item => item.Configured)?.Tag ??
+            report.Recommendation?.Model;
+        if (model is null || !report.Models.Any(item => item.Tag == model && item.Installed))
+        {
+            ShowUtilityError("Choose a currently installed model in Models & fit first.");
+            return;
+        }
+        var result = await RunUtilityAsync(_controller.UtilityOptimize(model, measure),
+            measure ? TimeSpan.FromMinutes(8) : TimeSpan.FromSeconds(25));
+        if (result is null || _screen != Screen.Optimization) return;
+        try
+        {
+            _optimizationModel = model;
+            _utilityOptimization = UtilityJson.ParseOptimization(result.StandardOutput);
+            _optimizationPage.ShowOptimization(model, _utilityOptimization,
+                CanApplyUtilityContext(model));
+        }
+        catch (InvalidDataException)
+        {
+            ShowUtilityError("The optimizer returned an unreadable report. Check again.");
+        }
+    }
+
+    private bool CanApplyUtilityContext(string model) =>
+        _utilityReport is { } report &&
+        (report.Selection.SourceModel == model ||
+            (report.Selection.SourceModel is null &&
+             report.Models.Any(item => item.Tag == model && item.Configured)));
+
+    private async Task UseUtilityModelAsync(string model)
+    {
+        if (_screen != Screen.Models) return;
+        var result = await RunUtilityAsync(_controller.UtilityUse(model), TimeSpan.FromMinutes(2));
+        if (result is null) return;
+        _utilityReport = null;
+        _utilityOptimization = null;
+        _optimizationModel = model;
+        await RefreshModelsAsync();
+    }
+
+    private async Task ApplyUtilityContextAsync(bool userOverride, int? choice)
+    {
+        if (_screen != Screen.Optimization || _optimizationModel is null || _utilityOptimization is null) return;
+        var context = userOverride ? choice : _utilityOptimization.RecommendedContext;
+        if (context is null) return;
+        if (userOverride)
+        {
+            var answer = MessageBox.Show(
+                $"Use {context.Value / 1024}K for {_optimizationModel}? This is your choice, " +
+                "and it may not have a successful measurement. AFK's recommendation stays separate.",
+                "Choose context", MessageBoxButtons.YesNo, MessageBoxIcon.Question,
+                MessageBoxDefaultButton.Button2);
+            if (answer != DialogResult.Yes) return;
+        }
+        var result = await RunUtilityAsync(
+            _controller.UtilityApplyContext(_optimizationModel, context.Value, userOverride),
+            TimeSpan.FromMinutes(3));
+        if (result is null) return;
+        _utilityReport = null;
+        _utilityOptimization = null;
+        await RefreshOptimizationAsync();
+    }
+
     // ------------------------------------------------------------------ setup
 
     private void RenderSetup()
     {
+        CancelUtilityOperation();
         _screen = Screen.Setup;
         _refreshTimer.Stop();
         _content.Controls.Clear();
@@ -689,6 +925,15 @@ public sealed class MainForm : Form
         var actions = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.LeftToRight, Padding = new Padding(0, 8, 0, 6) };
         actions.Controls.Add(_primary);
         actions.Controls.Add(_retry);
+        var exploreModels = Theme.Button("Models for this PC");
+        exploreModels.AccessibleName = "Explore models for this PC";
+        exploreModels.Click += (_, _) => Guard(async () =>
+        {
+            if (IsBusy) return;
+            RenderModels();
+            await RefreshModelsAsync();
+        });
+        actions.Controls.Add(exploreModels);
         var diagnostics = Theme.Button("Diagnostics");
         diagnostics.AccessibleName = "Open diagnostics";
         diagnostics.Click += (_, _) => Guard(OpenDiagnosticsAsync);
@@ -964,6 +1209,7 @@ public sealed class MainForm : Form
 
     private void ShowAbout()
     {
+        CancelUtilityOperation();
         _screen = Screen.About;
         _refreshTimer.Stop();
         _content.Controls.Clear();

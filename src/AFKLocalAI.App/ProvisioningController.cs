@@ -46,6 +46,24 @@ public sealed class ProvisioningController
 
     public ProcessSpec Diagnostics(string outputPath) => Engine("diagnostics", "diagnostics", "--output", outputPath);
 
+    public ProcessSpec UtilityReport(bool enrich = false) => enrich
+        ? Engine("utility-report", "utility-report", "--json", "--enrich")
+        : Engine("utility-report", "utility-report", "--json");
+
+    public ProcessSpec UtilityOptimize(string model, bool measure = false) => measure
+        ? Engine("utility-optimize", "utility-optimize", "--model", model, "--measure")
+        : Engine("utility-optimize", "utility-optimize", "--model", model);
+
+    public ProcessSpec UtilityUse(string model) =>
+        Engine("utility-use", "utility-use", "--model", model);
+
+    public ProcessSpec UtilityApplyContext(string model, int context, bool userOverride) =>
+        userOverride
+            ? Engine("utility-apply-context", "utility-apply-context", "--model", model,
+                "--context", context.ToString(System.Globalization.CultureInfo.InvariantCulture), "--override")
+            : Engine("utility-apply-context", "utility-apply-context", "--model", model,
+                "--context", context.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
     /// <summary>
     /// Runs one command on THIS installation's engine, on AFK AI's own runtime.
     /// </summary>

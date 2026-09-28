@@ -966,23 +966,13 @@ def category_fit(
     ram_ceil = budget.ram_gb - RAM_HEADROOM_GB
     demand = round(weights + kv, 2)
 
-    # All expert weights must fit RAM+VRAM even for MoE (only the active experts
-    # compute per token, but the whole model is resident), so the RAM ceiling
-    # gates MoE and dense alike - checked before the MoE speed verdict.
+    # All expert weights are resident, including inactive MoE experts. Active
+    # parameter count belongs in performance ranking, never this fit verdict.
     if weights > ram_ceil:
         return FitEstimate(
             "TooBig", weights, kv, f"~{format_num(weights)}GB weights > RAM budget"
         )
 
-    if candidate.is_moe:
-        active = candidate.active
-        verdict = "Good" if active and active <= 6 else "OK"
-        detail = f"~{format_num(active)}B active" if active else "unknown active"
-        why = (
-            f"MoE {detail} + {format_num(kv)}GB KV@{ctx_label} "
-            "= fast even on CPU offload"
-        )
-        return FitEstimate(verdict, weights, kv, why)
     if demand <= vram_usable:
         return FitEstimate(
             "Good",
@@ -996,7 +986,8 @@ def category_fit(
             "Tight",
             weights,
             kv,
-            f"~{format_num(demand)}GB (weights+KV@{ctx_label}) spills to CPU = slower",
+            f"~{format_num(demand)}GB (weights+KV@{ctx_label}) spills to CPU; "
+            "performance is unmeasured",
         )
     return FitEstimate(
         "Poor",
@@ -1246,26 +1237,13 @@ def fit_candidate(
     vram_usable = budget.vram_gb - 1.5
     if size > ram_ceil:
         return "TooBig", size, f"~{format_num(size)}GB > RAM budget"
-    if candidate.is_moe:
-        if candidate.active and candidate.active <= 6:
-            return (
-                "Good",
-                size,
-                "MoE "
-                f"~{format_num(candidate.active)}B active = fast even with CPU offload",
-            )
-        if candidate.active and candidate.active <= 10:
-            return "OK", size, f"MoE ~{format_num(candidate.active)}B active = usable"
-        return "OK", size, "MoE, unknown active"
     if size <= vram_usable:
         return (
             "Good",
             size,
             f"~{format_num(size)}GB fits fully in {budget.vram_gb}GB VRAM",
         )
-    if size <= 18:
-        return "Tight", size, f"~{format_num(size)}GB spills to CPU = slower"
-    return "Poor", size, f"~{format_num(size)}GB dense = heavy CPU offload"
+    return "Tight", size, f"~{format_num(size)}GB spills to CPU; performance unmeasured"
 
 
 def score_candidate(candidate: Candidate) -> Candidate:

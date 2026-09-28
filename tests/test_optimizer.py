@@ -50,6 +50,12 @@ def test_identity_changes_invalidate_cache(tmp_path, profiles):
     changes = (
         (replace(hardware, cpu="other CPU"), model, runtime),
         (hardware, replace(model, digest="sha256:two"), runtime),
+        (hardware, replace(model, identifier="renamed:latest"), runtime),
+        (hardware, replace(model, quantization="Q8_0"), runtime),
+        (hardware, replace(model, artifact_bytes=5 * optimizer.GIB), runtime),
+        (hardware, replace(model, max_context=32768), runtime),
+        (hardware, replace(model, kv_bytes_per_token=32_768), runtime),
+        (hardware, replace(model, architecture={"block_count": 40}), runtime),
         (hardware, model, replace(runtime, version="0.35.0")),
         (hardware, model, replace(runtime, backend="cuda")),
         (hardware, model, replace(runtime, options={"temperature": 1})),
@@ -62,6 +68,30 @@ def test_identity_changes_invalidate_cache(tmp_path, profiles):
         optimizer.measurement_key(hardware, replace(model, digest=None), runtime, 4096)
         is None
     )
+
+
+def test_ollama_numeric_metadata_rejects_fractional_and_huge_values():
+    assert optimizer_ollama._number(1.5) is None
+    assert optimizer_ollama._number(True) is None
+    assert optimizer_ollama._number(10**100) is None
+    assert optimizer_ollama._number(8192) == 8192
+
+
+def test_architecture_refuses_unbounded_or_unsupported_kv_dimensions():
+    ordinary = {
+        "general.architecture": "llama",
+        "llama.block_count": 32,
+        "llama.attention.head_count_kv": 8,
+        "llama.attention.key_length": 128,
+        "llama.attention.value_length": 128,
+    }
+    assert optimizer_ollama._architecture(ordinary)[1] == 131_072
+    huge = {**ordinary, "llama.block_count": 10**9}
+    assert optimizer_ollama._architecture(huge)[1] is None
+    hybrid = {
+        key.replace("llama", "unknown_hybrid"): value for key, value in ordinary.items()
+    }
+    assert optimizer_ollama._architecture(hybrid)[1] is None
 
 
 def test_cache_corrupt_stale_and_bounded(tmp_path, profiles):
@@ -290,3 +320,82 @@ def test_runtime_residency_is_observation_not_backend(monkeypatch):
     assert result.effective_context == 4096
     assert result.resident_vram_bytes == 100
     assert result.resident_total_bytes == 200
+
+
+def test_optimizer_http_rejects_oversized_runtime_json(monkeypatch):
+    import io
+
+    class Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.close()
+
+    monkeypatch.setattr(
+        optimizer_ollama,
+        "urlopen",
+        lambda *a, **k: Response(b"x" * (4 * 1024 * 1024 + 1)),
+    )
+    with pytest.raises(RuntimeError, match="too large"):
+        optimizer_ollama._json("/api/tags")
+
+
+def test_benchmark_rejects_model_digest_change_before_caching(monkeypatch):
+    run = optimizer.Run(True, 0.5, 0.1, 20, 100.0, 20, 40.0)
+    monkeypatch.setattr(optimizer_ollama, "_one_run", lambda *a, **k: run)
+
+    def fake_json(path, **kwargs):
+        if path == "/api/ps":
+            return {
+                "models": [{"name": "m", "digest": "b" * 64, "context_length": 4096}]
+            }
+        return {"models": [{"name": "m", "digest": "b" * 64}]}
+
+    monkeypatch.setattr(optimizer_ollama, "_json", fake_json)
+    result = optimizer_ollama.benchmark_ollama(
+        "m", 4096, expected_digest="a" * 64
+    )
+    assert not result.successful
+    assert result.error and "digest" in result.error
+
+
+def test_benchmark_stream_refuses_oversized_event(monkeypatch):
+    import io
+
+    class Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.close()
+
+    monkeypatch.setattr(
+        optimizer_ollama,
+        "urlopen",
+        lambda *a, **k: Response(b"x" * (64 * 1024 + 1) + b"\n"),
+    )
+    result = optimizer_ollama._one_run("m", 4096, timeout_sec=1)
+    assert not result.success
+    assert result.error and "too large" in result.error
+
+
+def test_windows_hardware_uses_friendly_cpu_name(monkeypatch):
+    import os
+
+    if os.name != "nt":
+        pytest.skip("Windows registry probe")
+    import winreg
+
+    class Key:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    monkeypatch.setattr(winreg, "OpenKey", lambda *a: Key())
+    monkeypatch.setattr(
+        winreg, "QueryValueEx", lambda *a: ("Intel(R) Core(TM) i9-14900HX", 1)
+    )
+    assert optimizer_ollama._windows_cpu_name() == "Intel(R) Core(TM) i9-14900HX"

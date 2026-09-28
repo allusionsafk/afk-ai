@@ -29,9 +29,9 @@ def test_model_scout_parse_and_fit_moe_candidate() -> None:
     assert scored.active == 3
     assert scored.is_moe
     assert scored.family == "qwen"
-    assert scored.verdict == "Good"
+    assert scored.verdict == "Tight"
     assert scored.size_gb == 21
-    assert scored.score > 170
+    assert "CPU" in scored.fit_why
 
 
 def test_model_scout_special_purpose_models_are_deprioritized() -> None:
@@ -788,8 +788,8 @@ def test_category_fit_moe_rejected_when_weights_exceed_ram() -> None:
     assert fit.verdict == "TooBig"
 
 
-def test_category_fit_moe_good_when_weights_fit_ram() -> None:
-    # A 35B-A3B (~21GB weights) fits 32GB RAM and runs fast on CPU offload.
+def test_category_fit_moe_reports_vram_spill_when_weights_fit_ram() -> None:
+    # Active experts affect compute, but all ~21GB of weights must be resident.
     moe = model_scout.parse_model("unsloth/Qwen3.6-35B-A3B-GGUF")
     fit = model_scout.category_fit(
         moe,
@@ -798,7 +798,17 @@ def test_category_fit_moe_good_when_weights_fit_ram() -> None:
         parallel=1,
         kv_factor=0.5,
     )
-    assert fit.verdict == "Good"
+    assert fit.verdict == "Tight"
+    assert "CPU" in fit.why
+
+
+def test_flat_fit_moe_never_calls_cpu_offload_a_good_fit() -> None:
+    moe = model_scout.parse_model("unsloth/Qwen3.6-35B-A3B-GGUF")
+    verdict, _, why = model_scout.fit_candidate(
+        moe, model_scout.Budget(ram_gb=32, vram_gb=12, disk_free_gb=200)
+    )
+    assert verdict == "Tight"
+    assert "CPU" in why
 
 
 def test_category_fit_reports_ctx_in_why_and_kv() -> None:

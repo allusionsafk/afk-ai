@@ -3,6 +3,12 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 
+if (args is ["--capture-utility", var captureDirectory])
+{
+    UtilityCapture.Run(captureDirectory);
+    return 0;
+}
+
 var failures = new List<string>();
 var passed = 0;
 
@@ -107,7 +113,11 @@ try
         controller.Status(liveness: true),
         controller.Start(),
         controller.Stop(),
-        controller.Diagnostics(Path.Combine(paths.DiagnosticsRoot, "report.json"))
+        controller.Diagnostics(Path.Combine(paths.DiagnosticsRoot, "report.json")),
+        controller.UtilityReport(),
+        controller.UtilityOptimize("qwen:9b"),
+        controller.UtilityUse("qwen:9b"),
+        controller.UtilityApplyContext("qwen:9b", 8192, false)
     };
     foreach (var spec in specs)
     {
@@ -140,7 +150,11 @@ try
                  ("status", controller.Status(liveness: true)),
                  ("start", controller.Start()),
                  ("stop", controller.Stop()),
-                 ("diagnostics", controller.Diagnostics(Path.Combine(paths.DiagnosticsRoot, "r.json")))
+                 ("diagnostics", controller.Diagnostics(Path.Combine(paths.DiagnosticsRoot, "r.json"))),
+                 ("utility-report", controller.UtilityReport()),
+                 ("utility-optimize", controller.UtilityOptimize("qwen:9b")),
+                 ("utility-use", controller.UtilityUse("qwen:9b")),
+                 ("utility-apply-context", controller.UtilityApplyContext("qwen:9b", 8192, false))
              })
     {
         var arguments = spec.Arguments;
@@ -159,6 +173,31 @@ try
     }
     Check("liveness status never loads the model", controller.Status(liveness: true).Arguments.Contains("--liveness"));
     Check("qualify status is a full check", !controller.Status(liveness: false).Arguments.Contains("--liveness"));
+
+    var fitJson = """{"schema_version":1,"hardware":{"cpu":"Example CPU","ram_total_bytes":34359738368,"gpus":[{"name":"Example GPU","vram_total_bytes":12884901888}]},"models":[{"model":"qwen:9b","verdict":"Fits","reason":"Memory estimate","weights_bytes":6442450944,"kv_bytes":536870912,"kv_source":"architecture estimate","quantization":"Q4_K_M","context":8192,"installed":true,"configured":true,"loaded":false}],"recommendation":{"model":"qwen:9b","basis":"configured model fits","source":"rule-based estimate","context":8192},"selection":{"source_model":"qwen:9b","recommended_context":null,"selected_context":4096,"override_context":4096}}""";
+    var fit = UtilityJson.ParseReport(fitJson);
+    Check("utility report keeps hardware facts", fit.Cpu == "Example CPU" && fit.Gpus[0].VramBytes == 12884901888);
+    Check("utility recommendation remains an estimate", fit.Recommendation?.Source == "rule-based estimate");
+    Check("utility selection distinguishes override", fit.Selection.OverrideContext == 4096 && fit.Selection.RecommendedContext is null);
+    Check("utility model retains unloaded state", fit.Models[0].Loaded == false && fit.Models[0].Installed);
+    var firstRunJson = """{"schema_version":1,"hardware":{},"models":[],"setup_plan":{"model":"qwen3.5:9b","context":32768,"basis":"selected from detected NVIDIA VRAM; setup confirms hardware","source":"installer tier policy"},"runtime":{"inventory_state":"Fresh"}}""";
+    var firstRun = UtilityJson.ParseReport(firstRunJson);
+    Check("empty inventory exposes the setup model", firstRun.Models.Count == 0 &&
+        firstRun.SetupPlan?.Model == "qwen3.5:9b" && firstRun.SetupPlan.Context == 32768);
+    Throws<InvalidDataException>("utility report refuses unknown schema", () => UtilityJson.ParseReport(fitJson.Replace("\"schema_version\":1", "\"schema_version\":2")));
+    Throws<InvalidDataException>("utility report refuses oversized output", () => UtilityJson.ParseReport(new string('x', 2_000_001)));
+    Throws<InvalidDataException>("utility report refuses missing inventory", () => UtilityJson.ParseReport("""{"schema_version":1,"hardware":{}}"""));
+
+    var optimizeJson = """{"schema_version":1,"recommended_context":8192,"confidence":"bounded short-prompt measurement","measurements":[{"context":8192,"effective_context":8192,"successful":true,"source":"cache","median_first_token_seconds":1.2,"median_prompt_tokens_per_second":100.0,"median_decode_tokens_per_second":30.0,"measured_at":"2026-09-28T10:00:00Z"}],"estimates":[{"context":8192,"safe":true,"kv_method":"architecture metadata"},{"context":16384,"safe":false,"reason":"memory"}],"user_setting":{"configured_model":"qwen:9b","source_model":"qwen:9b","recommended_context":4096,"selected_context":4096,"override_context":4096}}""";
+    var optimization = UtilityJson.ParseOptimization(optimizeJson);
+    Check("cached evidence stays cached", optimization.Measurements[0].Source == "cache");
+    Check("effective context is separate", optimization.Measurements[0].EffectiveContext == 8192);
+    Check("optimizer recommendation differs from user setting", optimization.RecommendedContext == 8192 && optimization.Selection.SelectedContext == 4096);
+    Check("unsafe context remains excluded", optimization.Estimates[1].Safe == false);
+
+    Check("utility report uses owned bridge", controller.UtilityReport().Arguments.Contains("utility-report") && controller.UtilityReport().FileName == ownedInterpreter);
+    Check("measurement requires explicit switch", !controller.UtilityOptimize("qwen:9b").Arguments.Contains("--measure") && controller.UtilityOptimize("qwen:9b", true).Arguments.Contains("--measure"));
+    Check("context override requires explicit switch", !controller.UtilityApplyContext("qwen:9b", 8192, false).Arguments.Contains("--override") && controller.UtilityApplyContext("qwen:9b", 8192, true).Arguments.Contains("--override"));
 
     var options = CommandLineOptions.Parse(new[] { "--self-test", "--data-root", dataRoot });
     Check("self-test option parses", options.SelfTest);

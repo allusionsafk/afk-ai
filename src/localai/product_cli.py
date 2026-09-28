@@ -11,6 +11,8 @@ Machine-readable output contract (the native shell parses these):
 - ``status --json``        exactly one JSON line (readiness schema 2)
 - ``diagnostics``          one JSON document
 - ``runtime-info``         one JSON line
+- ``utility-report``      one JSON document (hardware, installed fit, recommendation)
+- ``utility-optimize``    one JSON document (estimates and measured evidence)
 - ``start`` / ``pull-model`` ``AFK-EVENT:`` lines while running; ``start`` ends
                             with one ``AFK-STATUS:`` line
 - everything else          human-readable lines
@@ -25,16 +27,19 @@ import argparse
 import json
 import sys
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
 from localai import readiness
 from localai.afk_ownership import collect_afk_stop_report
 from localai.installation import read_runtime_identity, verify_installation
+from localai.optimizer import Measurement, MeasurementCache
 from localai.product_config import (
     LayoutError,
     ProductLayout,
     configured_model,
     ensure_runtime_config,
+    read_utility_selection,
     resolve_layout,
     valid_model_tag,
 )
@@ -43,6 +48,20 @@ EXIT_OK = 0
 EXIT_FAILED = 1
 EXIT_USAGE = 2
 EXIT_REFUSED = 3
+
+
+class _DeferredMeasurementCache(MeasurementCache):
+    """Commit a fresh benchmark only when the whole planned ladder finishes."""
+
+    def __init__(self, path: Path):
+        super().__init__(path)
+        self._pending: list[tuple[str | None, Measurement]] = []
+
+    def put(self, key: str | None, measurement: Measurement) -> None:
+        self._pending.append((key, measurement))
+
+    def commit(self) -> None:
+        super().put_many(tuple(self._pending))
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -77,6 +96,21 @@ def _parser() -> argparse.ArgumentParser:
     seed = sub.add_parser("seed-webui", parents=[roots])
     seed.add_argument("--model", required=True)
     seed.add_argument("--num-ctx", type=int, required=True)
+
+    utility_report = sub.add_parser("utility-report", parents=[roots])
+    utility_report.add_argument("--json", action="store_true")
+    utility_report.add_argument("--context", type=int, default=8192)
+    utility_report.add_argument("--enrich", action="store_true")
+
+    utility_optimize = sub.add_parser("utility-optimize", parents=[roots])
+    utility_optimize.add_argument("--model", required=True)
+    utility_optimize.add_argument("--measure", action="store_true")
+    utility_use = sub.add_parser("utility-use", parents=[roots])
+    utility_use.add_argument("--model", required=True)
+    utility_apply = sub.add_parser("utility-apply-context", parents=[roots])
+    utility_apply.add_argument("--model", required=True)
+    utility_apply.add_argument("--context", type=int, required=True)
+    utility_apply.add_argument("--override", action="store_true")
     return parser
 
 
@@ -166,6 +200,99 @@ def main(argv: Sequence[str]) -> int:
             )
         )
         return EXIT_OK if integrity.intact else EXIT_FAILED
+
+    if command == "utility-report":
+        from localai import product_utility_ollama
+
+        try:
+            report = product_utility_ollama.collect_local_report(
+                configured_model(layout), context=args.context, enrich=args.enrich
+            )
+            report["selection"] = read_utility_selection(layout)
+        except ValueError as error:
+            sys.stderr.write(f"{error}\n")
+            return EXIT_USAGE
+        _print(json.dumps(report, separators=(",", ":")))
+        return EXIT_OK
+
+    if command == "utility-optimize":
+        if not valid_model_tag(args.model):
+            sys.stderr.write("Invalid model name.\n")
+            return EXIT_USAGE
+        from localai import product_utility_ollama
+        from localai.optimizer import optimize
+
+        try:
+            hardware = product_utility_ollama.profile_hardware()
+            model, runtime = product_utility_ollama.profile_ollama(args.model)
+            if model.digest is None:
+                raise RuntimeError("Installed model identity is unavailable")
+            cache = _DeferredMeasurementCache(
+                layout.state_root / "optimizer-measurements-v1.json"
+            )
+            recommendation = optimize(
+                hardware,
+                model,
+                runtime,
+                lambda tag, context: product_utility_ollama.benchmark_ollama(
+                    tag, context, timeout_sec=20, expected_digest=model.digest
+                ),
+                cache,
+                cap=32768,
+                measure=args.measure,
+                use_cache=not args.measure,
+            )
+            if args.measure:
+                safe = {item.context for item in recommendation.estimates if item.safe}
+                completed = {
+                    item.context
+                    for item in recommendation.measurements
+                    if item.successful
+                }
+                if safe and completed == safe:
+                    cache.commit()
+                else:
+                    recommendation = replace(
+                        recommendation,
+                        recommended_context=None,
+                        selected_context=None,
+                        confidence="incomplete measurement",
+                        reasons=(*recommendation.reasons,
+                            "measurement stopped before every safe context completed"),
+                    )
+        except (OSError, RuntimeError, ValueError) as error:
+            _print(json.dumps({"schema_version": 1, "error": str(error)[:200]}))
+            return EXIT_FAILED
+        payload = recommendation.to_dict()
+        payload["user_setting"] = {
+            "configured_model": configured_model(layout),
+            **read_utility_selection(layout),
+        }
+        _print(json.dumps(payload, separators=(",", ":")))
+        return EXIT_OK
+
+    if command in {"utility-use", "utility-apply-context"}:
+        from localai import product_utility_actions
+
+        try:
+            if command == "utility-use":
+                action_result = product_utility_actions.use_installed_model(
+                    layout, args.model
+                )
+            else:
+                action_result = product_utility_actions.apply_context(
+                    layout, args.model, args.context, override=args.override
+                )
+        except ValueError as error:
+            _print(json.dumps({"schema_version": 1, "error": str(error)[:200]}))
+            return EXIT_USAGE
+        except (OSError, RuntimeError) as error:
+            _print(json.dumps({"schema_version": 1, "error": str(error)[:200]}))
+            return EXIT_FAILED
+        _print(
+            json.dumps({"schema_version": 1, **action_result}, separators=(",", ":"))
+        )
+        return EXIT_OK
 
     if command == "diagnostics":
         from localai.diagnostics import collect_diagnostics
