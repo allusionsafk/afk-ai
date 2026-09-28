@@ -27,11 +27,13 @@ import argparse
 import json
 import sys
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
 from localai import readiness
 from localai.afk_ownership import collect_afk_stop_report
 from localai.installation import read_runtime_identity, verify_installation
+from localai.optimizer import Measurement, MeasurementCache
 from localai.product_config import (
     LayoutError,
     ProductLayout,
@@ -46,6 +48,21 @@ EXIT_OK = 0
 EXIT_FAILED = 1
 EXIT_USAGE = 2
 EXIT_REFUSED = 3
+
+
+class _DeferredMeasurementCache(MeasurementCache):
+    """Commit a fresh benchmark only when the whole planned ladder finishes."""
+
+    def __init__(self, path: Path):
+        super().__init__(path)
+        self._pending: list[tuple[str | None, Measurement]] = []
+
+    def put(self, key: str | None, measurement: Measurement) -> None:
+        self._pending.append((key, measurement))
+
+    def commit(self) -> None:
+        for key, measurement in self._pending:
+            super().put(key, measurement)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -204,11 +221,16 @@ def main(argv: Sequence[str]) -> int:
             sys.stderr.write("Invalid model name.\n")
             return EXIT_USAGE
         from localai import product_utility_ollama
-        from localai.optimizer import MeasurementCache, optimize
+        from localai.optimizer import optimize
 
         try:
             hardware = product_utility_ollama.profile_hardware()
             model, runtime = product_utility_ollama.profile_ollama(args.model)
+            if model.digest is None:
+                raise RuntimeError("Installed model identity is unavailable")
+            cache = _DeferredMeasurementCache(
+                layout.state_root / "optimizer-measurements-v1.json"
+            )
             recommendation = optimize(
                 hardware,
                 model,
@@ -216,10 +238,29 @@ def main(argv: Sequence[str]) -> int:
                 lambda tag, context: product_utility_ollama.benchmark_ollama(
                     tag, context, timeout_sec=20, expected_digest=model.digest
                 ),
-                MeasurementCache(layout.state_root / "optimizer-measurements-v1.json"),
+                cache,
                 cap=32768,
                 measure=args.measure,
+                use_cache=not args.measure,
             )
+            if args.measure:
+                safe = {item.context for item in recommendation.estimates if item.safe}
+                completed = {
+                    item.context
+                    for item in recommendation.measurements
+                    if item.successful
+                }
+                if safe and completed == safe:
+                    cache.commit()
+                else:
+                    recommendation = replace(
+                        recommendation,
+                        recommended_context=None,
+                        selected_context=None,
+                        confidence="incomplete measurement",
+                        reasons=(*recommendation.reasons,
+                            "measurement stopped before every safe context completed"),
+                    )
         except (OSError, RuntimeError, ValueError) as error:
             _print(json.dumps({"schema_version": 1, "error": str(error)[:200]}))
             return EXIT_FAILED

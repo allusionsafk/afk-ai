@@ -213,3 +213,44 @@ def test_optimizer_rejects_invalid_model_before_runtime_call(
     )
     assert code == 2
     assert "invalid model" in capsys.readouterr().err.lower()
+
+
+def test_partial_explicit_measurement_makes_no_recommendation_or_cache(
+    monkeypatch, tmp_path, capsys
+):
+    model = optimizer.ModelProfile(
+        "qwen:9b", "a" * 64, "qwen3", 9_000_000_000, "Q4_K_M",
+        6 * optimizer.GIB, 32768, 65536, {"block_count": 32},
+    )
+    runtime = optimizer.RuntimeProfile("ollama", "0.34.4", None, {})
+    monkeypatch.setattr(product_utility_ollama, "profile_hardware", _pc)
+    monkeypatch.setattr(
+        product_utility_ollama, "profile_ollama", lambda _: (model, runtime)
+    )
+
+    def benchmark(_tag, context, **_kwargs):
+        if context > 4096:
+            return optimizer.Measurement(
+                context, False, (), None, None, None, None,
+                "2026-09-28T10:00:00+00:00", "interrupted", effective_context=None,
+            )
+        runs = tuple(
+            optimizer.Run(True, 2.0, 0.5, 60, 120.0, 48, 30.0)
+            for _ in range(optimizer.RUNS)
+        )
+        return optimizer.Measurement(
+            context, True, runs, 2.0, 0.5, 120.0, 30.0,
+            "2026-09-28T10:00:00+00:00", None, effective_context=context,
+        )
+
+    monkeypatch.setattr(product_utility_ollama, "benchmark_ollama", benchmark)
+    data = tmp_path / "data"
+    code = product_cli.main([
+        "--program-root", str(tmp_path / "program"), "--data-root", str(data),
+        "utility-optimize", "--model", "qwen:9b", "--measure",
+    ])
+    result = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert result["recommended_context"] is None
+    assert result["confidence"] == "incomplete measurement"
+    assert not (data / "State" / "optimizer-measurements-v1.json").exists()
