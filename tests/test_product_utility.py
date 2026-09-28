@@ -12,7 +12,7 @@ def _pc() -> HardwareProfile:
         logical_cores=32,
         ram_total_bytes=32 * GIB,
         ram_available_bytes=18 * GIB,
-        gpus=(GPU("RTX 4080 Laptop", 12 * GIB, 10 * GIB),),
+        gpus=(GPU("Example 12 GiB GPU", 12 * GIB, 10 * GIB),),
         platform="Windows 11",
     )
 

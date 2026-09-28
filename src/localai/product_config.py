@@ -302,6 +302,9 @@ def ensure_runtime_config(
             desired[SEARXNG_SECRET_KEY] = secrets.token_hex(24)
     if model is not None:
         desired[DEFAULT_MODEL_KEY] = model
+        if utility is None and current.get(DEFAULT_MODEL_KEY) != model:
+            for key in UTILITY_KEYS:
+                desired.pop(key, None)
     elif not valid_model_tag(desired.get(DEFAULT_MODEL_KEY)):
         recorded = _installer_state_model(layout)
         if recorded:

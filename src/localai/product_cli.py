@@ -61,8 +61,7 @@ class _DeferredMeasurementCache(MeasurementCache):
         self._pending.append((key, measurement))
 
     def commit(self) -> None:
-        for key, measurement in self._pending:
-            super().put(key, measurement)
+        super().put_many(tuple(self._pending))
 
 
 def _parser() -> argparse.ArgumentParser:

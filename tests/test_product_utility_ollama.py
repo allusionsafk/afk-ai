@@ -14,7 +14,7 @@ def _pc():
         32,
         32 * optimizer.GIB,
         18 * optimizer.GIB,
-        (optimizer.GPU("RTX 4080", 12 * optimizer.GIB, 10 * optimizer.GIB),),
+        (optimizer.GPU("Example 12 GiB GPU", 12 * optimizer.GIB, 10 * optimizer.GIB),),
         "Windows 11",
     )
 
@@ -51,6 +51,40 @@ def test_quick_report_uses_three_local_calls_and_exact_installed_bytes():
     assert report["models"][0]["weights_bytes"] == 6 * optimizer.GIB
     assert report["models"][0]["loaded"] is True
     assert report["recommendation"]["model"] == "qwen:9b"
+
+
+def test_empty_inventory_shows_existing_setup_tier_choice():
+    response = {
+        "/api/version": {"version": "0.34.4"},
+        "/api/tags": {"models": []},
+        "/api/ps": {"models": []},
+    }
+    report = product_utility_ollama.collect_local_report(
+        None, fetch=lambda path, _: response[path], hardware_probe=_pc
+    )
+    assert report["recommendation"] is None
+    assert report["setup_plan"]["model"] == "qwen3.5:9b"
+    assert report["setup_plan"]["context"] == 32768
+    assert report["setup_plan"]["source"] == "installer tier policy"
+
+
+def test_setup_tier_uses_installer_one_decimal_vram_rounding():
+    from dataclasses import replace
+
+    pc = _pc()
+    near_twelve = replace(
+        pc, gpus=(optimizer.GPU("Example GPU", 12_878_610_432, None),)
+    )
+    response = {
+        "/api/version": {"version": "0.34.4"},
+        "/api/tags": {"models": []},
+        "/api/ps": {"models": []},
+    }
+    report = product_utility_ollama.collect_local_report(
+        None, fetch=lambda path, _: response[path], hardware_probe=lambda: near_twelve
+    )
+    assert report["setup_plan"]["tier"] == "A"
+    assert report["setup_plan"]["model"] == "qwen3.5:9b"
 
 
 def test_partial_runtime_failure_preserves_installed_inventory_but_unknown_loaded():
@@ -254,3 +288,30 @@ def test_partial_explicit_measurement_makes_no_recommendation_or_cache(
     assert result["recommended_context"] is None
     assert result["confidence"] == "incomplete measurement"
     assert not (data / "State" / "optimizer-measurements-v1.json").exists()
+
+
+def test_deferred_measurements_commit_in_one_atomic_replace(monkeypatch, tmp_path):
+    cache = product_cli._DeferredMeasurementCache(tmp_path / "measurements.json")
+    calls = []
+    original_replace = optimizer.os.replace
+
+    def counted_replace(source, destination):
+        calls.append((source, destination))
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(optimizer.os, "replace", counted_replace)
+    for context in (4096, 8192):
+        runs = tuple(
+            optimizer.Run(True, 2.0, 0.5, 60, 120.0, 48, 30.0)
+            for _ in range(optimizer.RUNS)
+        )
+        cache.put(
+            f"key-{context}",
+            optimizer.Measurement(
+                context, True, runs, 2.0, 0.5, 120.0, 30.0,
+                "2026-09-28T10:00:00+00:00", None, effective_context=context,
+            ),
+        )
+    cache.commit()
+    assert len(calls) == 1
+    assert set(cache._read()) == {"key-4096", "key-8192"}

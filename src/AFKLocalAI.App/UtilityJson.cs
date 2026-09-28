@@ -9,12 +9,13 @@ public sealed record UtilityModel(
     long? WeightsBytes, long? KvBytes, string? KvSource, long? VramRequiredBytes,
     int Context, bool Installed, bool Configured, bool? Loaded);
 public sealed record UtilityRecommendation(string Model, string Basis, string Source, int Context);
+public sealed record UtilitySetupPlan(string Model, string Basis, string Source, int Context);
 public sealed record UtilitySelection(
     string? SourceModel, int? RecommendedContext, int? SelectedContext, int? OverrideContext);
 public sealed record UtilityReport(
     string? Cpu, long? RamBytes, IReadOnlyList<UtilityGpu> Gpus,
     IReadOnlyList<UtilityModel> Models, UtilityRecommendation? Recommendation,
-    UtilitySelection Selection, string InventoryState, IReadOnlyList<string> Errors);
+    UtilitySetupPlan? SetupPlan, UtilitySelection Selection, string InventoryState, IReadOnlyList<string> Errors);
 public sealed record UtilityMeasurement(
     int Context, int? EffectiveContext, bool Successful, string Source,
     double? FirstTokenSeconds, double? PromptTokensPerSecond,
@@ -63,6 +64,15 @@ public static class UtilityJson
                     model, Text(rec, "basis") ?? "Based on a local fit estimate",
                     Text(rec, "source") ?? "unknown", Context(rec, "context") ?? 0);
         }
+        UtilitySetupPlan? setupPlan = null;
+        if (TryObj(root, "setup_plan", out var setup))
+        {
+            var model = Text(setup, "model");
+            var context = Context(setup, "context");
+            if (model is not null && ModelTag.IsMatch(model) && context is > 0 and <= 32768)
+                setupPlan = new UtilitySetupPlan(model, Text(setup, "basis") ?? "Setup tier policy",
+                    Text(setup, "source") ?? "installer tier policy", context.Value);
+        }
         var runtime = TryObj(root, "runtime", out var found) ? found : default;
         var errors = runtime.ValueKind == JsonValueKind.Object
             ? Array(runtime, "errors", 8).Select(item => item.ValueKind == JsonValueKind.String
@@ -70,7 +80,7 @@ public static class UtilityJson
             : System.Array.Empty<string>();
         return new UtilityReport(
             Text(hardware, "cpu"), Integer(hardware, "ram_total_bytes"), gpus, models,
-            recommendation, Selection(root, "selection"),
+            recommendation, setupPlan, Selection(root, "selection"),
             Text(runtime, "inventory_state") ?? "Unknown", errors);
     }
 

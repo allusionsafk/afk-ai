@@ -136,7 +136,14 @@ public sealed class MainForm : Form
 
         _modelsPage.RefreshRequested += () => Guard(RefreshModelsAsync);
         _modelsPage.SetupRequested += () => Guard(async () => { RenderSetup(); await RefreshPreflightAsync(); });
-        _modelsPage.OptimizeRequested += () => Guard(async () => { RenderOptimization(); await RefreshOptimizationAsync(); });
+        _modelsPage.OptimizeRequested += model => Guard(async () =>
+        {
+            _optimizationModel = model;
+            _utilityOptimization = null;
+            RenderOptimization();
+            _optimizationPage.ShowPending(model);
+            await RefreshOptimizationAsync();
+        });
         _modelsPage.UseRequested += model => Guard(() => UseUtilityModelAsync(model));
         _modelsPage.CancelRequested += CancelUtilityOperation;
         _optimizationPage.RefreshRequested += () => Guard(() => RefreshOptimizationAsync());
@@ -692,7 +699,8 @@ public sealed class MainForm : Form
         _content.Controls.Add(_optimizationPage);
         AcceptButton = null;
         if (_utilityOptimization is not null && _optimizationModel is not null)
-            _optimizationPage.ShowOptimization(_optimizationModel, _utilityOptimization);
+            _optimizationPage.ShowOptimization(_optimizationModel, _utilityOptimization,
+                CanApplyUtilityContext(_optimizationModel));
     }
 
     private void CancelUtilityOperation() => _utilityOperation?.Cancel();
@@ -714,7 +722,8 @@ public sealed class MainForm : Form
         var outcome = "";
         SetUtilityBusy(true, spec.Purpose switch
         {
-            "utility-optimize" => "Measuring this PC. You can cancel at any time…",
+            "utility-optimize" when spec.Arguments.Contains("--measure") => "Measuring this PC. You can cancel at any time…",
+            "utility-optimize" => "Checking saved measurements and safe contexts…",
             "utility-use" or "utility-apply-context" => "Applying your choice…",
             _ => "Checking local models…"
         });
@@ -794,12 +803,12 @@ public sealed class MainForm : Form
         var report = _utilityReport ?? await FetchUtilityReportAsync();
         if (report is null || _screen != Screen.Optimization) return;
         _utilityReport = report;
-        var model = report.Selection.SourceModel ??
+        var model = _optimizationModel ?? report.Selection.SourceModel ??
             report.Models.FirstOrDefault(item => item.Configured)?.Tag ??
             report.Recommendation?.Model;
-        if (model is null)
+        if (model is null || !report.Models.Any(item => item.Tag == model && item.Installed))
         {
-            ShowUtilityError("Choose an installed model in Models & fit first.");
+            ShowUtilityError("Choose a currently installed model in Models & fit first.");
             return;
         }
         var result = await RunUtilityAsync(_controller.UtilityOptimize(model, measure),
@@ -809,13 +818,20 @@ public sealed class MainForm : Form
         {
             _optimizationModel = model;
             _utilityOptimization = UtilityJson.ParseOptimization(result.StandardOutput);
-            _optimizationPage.ShowOptimization(model, _utilityOptimization);
+            _optimizationPage.ShowOptimization(model, _utilityOptimization,
+                CanApplyUtilityContext(model));
         }
         catch (InvalidDataException)
         {
             ShowUtilityError("The optimizer returned an unreadable report. Check again.");
         }
     }
+
+    private bool CanApplyUtilityContext(string model) =>
+        _utilityReport is { } report &&
+        (report.Selection.SourceModel == model ||
+            (report.Selection.SourceModel is null &&
+             report.Models.Any(item => item.Tag == model && item.Configured)));
 
     private async Task UseUtilityModelAsync(string model)
     {
@@ -824,6 +840,7 @@ public sealed class MainForm : Form
         if (result is null) return;
         _utilityReport = null;
         _utilityOptimization = null;
+        _optimizationModel = model;
         await RefreshModelsAsync();
     }
 

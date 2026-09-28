@@ -10,6 +10,7 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from localai.installer_vet import classify_tier, load_tiers
 from localai.optimizer import HardwareProfile, ModelProfile
 from localai.optimizer_ollama import (
     _architecture,
@@ -191,6 +192,37 @@ def collect_local_report(
     if enrich and models:
         models, enriched = _enrich(models, configured_model, fetch)
     report = build_report(hardware, models, configured_model, loaded, context=context)
+    try:
+        tiers = load_tiers()
+        vram = max(
+            (
+                gpu.dedicated_vram_bytes
+                for gpu in hardware.gpus
+                if type(gpu.dedicated_vram_bytes) is int
+                and 0 < gpu.dedicated_vram_bytes <= MAX_BYTES
+            ),
+            default=0,
+        )
+        # Match the installer's get_vram_gb one-decimal contract at tier edges.
+        tier = classify_tier(round(vram / (1024**3), 1), tiers=tiers)
+        pick = tier["pick"]
+        source, planned_context = pick["source"], pick["ctx"]
+        if (
+            not isinstance(source, str)
+            or not valid_model_tag(source)
+            or type(planned_context) is not int
+            or not 1024 <= planned_context <= 32768
+        ):
+            raise ValueError("invalid setup tier choice")
+        report["setup_plan"] = {
+            "model": source,
+            "context": planned_context,
+            "tier": str(tier["id"])[:16],
+            "source": "installer tier policy",
+            "basis": "selected from detected NVIDIA VRAM; setup confirms hardware",
+        }
+    except (OSError, KeyError, TypeError, ValueError):
+        report["setup_plan"] = None
     report["observed_at_utc"] = datetime.now(UTC).isoformat()
     report["runtime"] = {
         "name": "ollama",

@@ -386,14 +386,23 @@ class MeasurementCache:
             return None
 
     def put(self, key: str | None, measurement: Measurement) -> None:
-        if (
-            key is None
-            or not measurement.successful
-            or measurement.effective_context != measurement.context
-        ):
+        self.put_many(((key, measurement),))
+
+    def put_many(
+        self, measurements: tuple[tuple[str | None, Measurement], ...]
+    ) -> None:
+        valid = tuple(
+            (key, measurement)
+            for key, measurement in measurements
+            if key is not None
+            and measurement.successful
+            and measurement.effective_context == measurement.context
+        )
+        if not valid:
             return
         entries = self._read()
-        entries[key] = asdict(measurement)
+        for key, measurement in valid:
+            entries[key] = asdict(measurement)
         entries = dict(
             sorted(
                 entries.items(),

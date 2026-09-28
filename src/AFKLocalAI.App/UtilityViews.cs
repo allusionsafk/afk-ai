@@ -38,6 +38,15 @@ internal static class UtilityViewParts
 
     public static string Context(int? context) => context is null or <= 0 ? "Unknown" :
         context.Value >= 1024 ? $"{context.Value / 1024}K" : context.Value.ToString();
+
+    public static void Primary(Button button, bool primary)
+    {
+        button.BackColor = primary ? Theme.Action : Theme.Surface;
+        button.ForeColor = primary ? Color.White : Theme.PrimaryText;
+        button.FlatAppearance.BorderColor = primary ? Theme.Action : Theme.Border;
+        button.FlatAppearance.MouseOverBackColor = primary ? Theme.ActionHover : Theme.Elevated;
+        button.FlatAppearance.MouseDownBackColor = primary ? Color.Black : Theme.Sunken;
+    }
 }
 
 /// <summary>Installed models first; detail is disclosed only for the selected row.</summary>
@@ -45,11 +54,13 @@ public sealed class ModelsFitPage : UserControl
 {
     public event Action? RefreshRequested;
     public event Action? SetupRequested;
-    public event Action? OptimizeRequested;
+    public event Action<string>? OptimizeRequested;
     public event Action<string>? UseRequested;
     public event Action? CancelRequested;
 
     private readonly Label _pc = UtilityViewParts.Body("Checking this PC…");
+    private readonly Label _choiceHeading = UtilityViewParts.Section("Best installed choice");
+    private readonly Label _installedHeading = UtilityViewParts.Section("Installed models");
     private readonly Label _bestModel = new()
     {
         AutoSize = true, Font = Theme.Display(16, FontStyle.Bold),
@@ -60,7 +71,7 @@ public sealed class ModelsFitPage : UserControl
     private readonly ListView _models = new()
     {
         View = View.Details, FullRowSelect = true, MultiSelect = false, HideSelection = false,
-        Height = 210, Font = Theme.Font(10), AccessibleName = "Installed model fit",
+        Height = 84, Font = Theme.Font(10), AccessibleName = "Installed model fit",
         BorderStyle = BorderStyle.FixedSingle
     };
     private readonly TextBox _detail = new()
@@ -86,7 +97,7 @@ public sealed class ModelsFitPage : UserControl
         UtilityViewParts.Add(stack, UtilityViewParts.Body("A clear view of what is installed and what this PC can run."));
         UtilityViewParts.Add(stack, UtilityViewParts.Section("This PC"));
         UtilityViewParts.Add(stack, _pc);
-        UtilityViewParts.Add(stack, UtilityViewParts.Section("Best installed choice"));
+        UtilityViewParts.Add(stack, _choiceHeading);
         UtilityViewParts.Add(stack, _bestModel);
         UtilityViewParts.Add(stack, _recommendation);
         UtilityViewParts.Add(stack, _state);
@@ -94,7 +105,7 @@ public sealed class ModelsFitPage : UserControl
             Margin = new Padding(0, 10, 0, 8) };
         foreach (var button in new[] { _use, _setup, _optimize, _refresh, _cancel }) actions.Controls.Add(button);
         UtilityViewParts.Add(stack, actions);
-        UtilityViewParts.Add(stack, UtilityViewParts.Section("Installed models"));
+        UtilityViewParts.Add(stack, _installedHeading);
         _models.Columns.Add("Model", 235);
         _models.Columns.Add("Fit at 8K", 125);
         _models.Columns.Add("Size", 85);
@@ -111,7 +122,8 @@ public sealed class ModelsFitPage : UserControl
         _cancel.AccessibleName = "Cancel Utility operation";
         _use.Click += (_, _) => { if (SelectedModel is { } tag) UseRequested?.Invoke(tag); };
         _setup.Click += (_, _) => SetupRequested?.Invoke();
-        _optimize.Click += (_, _) => OptimizeRequested?.Invoke();
+        _optimize.AccessibleName = "Optimize selected installed model";
+        _optimize.Click += (_, _) => { if (SelectedModel is { } tag) OptimizeRequested?.Invoke(tag); };
         _refresh.Click += (_, _) => RefreshRequested?.Invoke();
         _cancel.Click += (_, _) => CancelRequested?.Invoke();
         SetBusy(false, "");
@@ -125,7 +137,7 @@ public sealed class ModelsFitPage : UserControl
         _state.Text = message;
         _use.Enabled = !busy && SelectedModel is not null;
         _setup.Enabled = !busy;
-        _optimize.Enabled = !busy;
+        _optimize.Enabled = !busy && SelectedModel is not null;
         _refresh.Enabled = !busy;
         _cancel.Visible = busy;
     }
@@ -136,9 +148,15 @@ public sealed class ModelsFitPage : UserControl
         var gpu = report.Gpus.Count == 0 ? "GPU unknown" : string.Join(" · ",
             report.Gpus.Select(item => $"{item.Name} ({UtilityViewParts.Gib(item.VramBytes)} VRAM)"));
         _pc.Text = $"{report.Cpu ?? "CPU unknown"} · {UtilityViewParts.Gib(report.RamBytes)} RAM\n{gpu}";
-        _bestModel.Text = report.Recommendation?.Model ?? "Not yet known";
+        var setupChoice = report.Models.Count == 0 && report.InventoryState == "Fresh"
+            ? report.SetupPlan : null;
+        _choiceHeading.Text = setupChoice is not null ? "Best choice for this PC (setup)" :
+            report.Models.Count == 0 ? "No installed choice yet" : "Best installed choice";
+        _bestModel.Text = report.Recommendation?.Model ?? setupChoice?.Model ?? "Not yet known";
         _recommendation.Text = report.Recommendation is { } rec
             ? $"{rec.Basis}. At {UtilityViewParts.Context(rec.Context)}; {rec.Source}."
+            : setupChoice is { } plan
+                ? $"Setup choice for this PC at {UtilityViewParts.Context(plan.Context)}. {plan.Basis}."
             : "No installed model has enough evidence for a confident recommendation yet.";
         _state.Text = report.Models.Count == 0
             ? report.InventoryState == "Fresh"
@@ -153,10 +171,18 @@ public sealed class ModelsFitPage : UserControl
                 UtilityViewParts.Gib(model.WeightsBytes), state }) { Tag = model.Tag };
             _models.Items.Add(item);
         }
+        _models.Height = Math.Clamp(30 + _models.Items.Count * 28, 84, 210);
+        _models.Visible = report.Models.Count > 0;
+        _installedHeading.Visible = report.Models.Count > 0;
         var chosen = report.Recommendation?.Model ?? report.Models.FirstOrDefault()?.Tag;
         foreach (ListViewItem item in _models.Items)
             if ((string?)item.Tag == chosen) { item.Selected = true; item.Focused = true; break; }
         _setup.Visible = report.Models.Count == 0;
+        _use.Visible = report.Models.Count > 0;
+        _optimize.Visible = report.Models.Count > 0;
+        _setup.Text = setupChoice is null ? "Set up and install a model" :
+            $"Set up and install {setupChoice.Model}";
+        UtilityViewParts.Primary(_setup, setupChoice is not null);
         ShowSelection();
     }
 
@@ -165,7 +191,12 @@ public sealed class ModelsFitPage : UserControl
         var model = _report?.Models.FirstOrDefault(item => item.Tag == SelectedModel);
         _use.Enabled = model is { Installed: true } && !_cancel.Visible &&
             _report?.InventoryState == "Fresh";
-        _detail.Text = model is null ? "Select a model to see the evidence behind its fit." :
+        _optimize.Enabled = _use.Enabled;
+        _detail.Text = model is null ?
+            _report?.SetupPlan is { } plan && _report.InventoryState == "Fresh"
+                ? $"{plan.Model} is the existing setup tier choice at {UtilityViewParts.Context(plan.Context)}. " +
+                  "This is a hardware-based plan, not an installed or measured model. Setup checks this PC again before downloading."
+                : "Select a model to see the evidence behind its fit." :
             $"{model.Tag} · {model.Verdict}\r\n{model.Reason}\r\n" +
             $"Weights: {UtilityViewParts.Gib(model.WeightsBytes)} (local model size). " +
             $"Quantization: {model.Quantization ?? "Unknown"}.\r\n" +
@@ -180,6 +211,10 @@ public sealed class ModelsFitPage : UserControl
 
 public sealed class OptimizationPage : UserControl
 {
+    private sealed record ContextOption(int Value)
+    {
+        public override string ToString() => UtilityViewParts.Context(Value);
+    }
     public event Action? RefreshRequested;
     public event Action? MeasureRequested;
     public event Action? ApplyRecommendedRequested;
@@ -195,7 +230,7 @@ public sealed class OptimizationPage : UserControl
         BackColor = Theme.Sunken, ForeColor = Theme.SecondaryText, BorderStyle = BorderStyle.FixedSingle,
         Font = Theme.Font(9), AccessibleName = "Optimization evidence"
     };
-    private readonly Button _measure = Theme.Button("Measure on this PC", primary: true);
+    private readonly Button _measure = Theme.Button("Measure on this PC");
     private readonly Button _apply = Theme.Button("Apply recommendation");
     private readonly Button _override = Theme.Button("Apply chosen context");
     private readonly Button _refresh = Theme.Button("Check again");
@@ -203,6 +238,7 @@ public sealed class OptimizationPage : UserControl
     private readonly ComboBox _contexts = new() { DropDownStyle = ComboBoxStyle.DropDownList,
         Width = 110, Font = Theme.Font(10), AccessibleName = "Chosen context" };
     private UtilityOptimization? _optimization;
+    private bool _canApply;
 
     public OptimizationPage()
     {
@@ -239,7 +275,7 @@ public sealed class OptimizationPage : UserControl
         _cancel.AccessibleName = "Cancel measurement";
         _measure.Click += (_, _) => MeasureRequested?.Invoke();
         _apply.Click += (_, _) => ApplyRecommendedRequested?.Invoke();
-        _override.Click += (_, _) => { if (_contexts.SelectedItem is int context) ApplyOverrideRequested?.Invoke(context); };
+        _override.Click += (_, _) => { if (_contexts.SelectedItem is ContextOption option) ApplyOverrideRequested?.Invoke(option.Value); };
         _refresh.Click += (_, _) => RefreshRequested?.Invoke();
         _cancel.Click += (_, _) => CancelRequested?.Invoke();
         SetBusy(false, "");
@@ -249,16 +285,29 @@ public sealed class OptimizationPage : UserControl
     {
         _state.Text = message;
         _measure.Enabled = !busy;
-        _apply.Enabled = !busy && _optimization?.RecommendedContext is not null;
-        _override.Enabled = !busy && _contexts.SelectedItem is int;
+        _apply.Enabled = !busy && _canApply && _optimization?.RecommendedContext is not null;
+        _override.Enabled = !busy && _canApply && _contexts.SelectedItem is ContextOption;
         _refresh.Enabled = !busy;
         _contexts.Enabled = !busy;
         _cancel.Visible = busy;
     }
 
-    public void ShowOptimization(string model, UtilityOptimization optimization)
+    public void ShowPending(string model)
+    {
+        _optimization = null;
+        _canApply = false;
+        _model.Text = model;
+        _recommended.Text = "Checking saved evidence…";
+        _setting.Text = "Checking your setting…";
+        _detail.Text = "";
+        _contexts.Items.Clear();
+        SetBusy(true, "Checking local model evidence…");
+    }
+
+    public void ShowOptimization(string model, UtilityOptimization optimization, bool canApply)
     {
         _optimization = optimization;
+        _canApply = canApply;
         _model.Text = model;
         var measured = optimization.Measurements.FirstOrDefault(item =>
             item.Successful && item.Context == optimization.RecommendedContext);
@@ -266,14 +315,20 @@ public sealed class OptimizationPage : UserControl
             ? $"{UtilityViewParts.Context(context)} · Measured on this PC" +
               (measured is null ? "" : $" · {measured.DecodeTokensPerSecond:0.#} tokens/s ({measured.Source})")
             : "No measured recommendation yet. Run a measurement to compare safe contexts.";
+        var readyToApply = canApply && optimization.RecommendedContext is not null &&
+            optimization.Selection.SelectedContext != optimization.RecommendedContext;
+        _measure.Text = optimization.RecommendedContext is null ? "Measure on this PC" : "Measure again";
+        UtilityViewParts.Primary(_apply, readyToApply);
+        UtilityViewParts.Primary(_measure, !readyToApply && optimization.RecommendedContext is null);
         _setting.Text = optimization.Selection.SelectedContext is { } selected
             ? $"{UtilityViewParts.Context(selected)}" +
               (optimization.Selection.OverrideContext is not null ? " · Your override" : " · AFK recommendation applied")
             : "No context has been applied through Optimization.";
-        _state.Text = optimization.Confidence;
+        _state.Text = canApply ? optimization.Confidence :
+            $"{optimization.Confidence}. Use this model in Models & fit before applying a context.";
         _contexts.Items.Clear();
         foreach (var item in optimization.Estimates.Where(item => item.Safe && item.Context > 0))
-            _contexts.Items.Add(item.Context);
+            _contexts.Items.Add(new ContextOption(item.Context));
         if (_contexts.Items.Count > 0) _contexts.SelectedIndex = 0;
         var lines = new List<string>();
         foreach (var item in optimization.Measurements)
@@ -287,6 +342,6 @@ public sealed class OptimizationPage : UserControl
             lines.Add($"{UtilityViewParts.Context(item.Context)}: excluded estimate · {item.Reason}");
         _detail.Text = lines.Count > 0 ? string.Join(Environment.NewLine + Environment.NewLine, lines)
             : "No measurements yet. Memory estimates alone do not establish performance.";
-        SetBusy(false, optimization.Confidence);
+        SetBusy(false, _state.Text);
     }
 }

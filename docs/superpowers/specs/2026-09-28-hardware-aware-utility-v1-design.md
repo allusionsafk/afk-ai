@@ -12,7 +12,7 @@ AFK should show this PC, recommend a model with inspectable reasons, distinguish
 
 ## Product flow
 
-The first-run and Models & Fit view begins with a fast local inventory and hardware summary. It marks the best eligible installed model, shows alternatives, and opens details for size, quantization, fit context, evidence source, and limitations. Selecting an installed model is explicit. A future/optional remote recommendation must present an explicit install action and an exact bounded download size when known.
+The first-run and Models & Fit view begins with a fast local inventory and hardware summary. It marks the best eligible installed model, shows alternatives, and opens details for size, quantization, fit context, evidence source, and limitations. When the fresh inventory is empty, it presents the existing installer's hardware-tier model choice as a setup plan, clearly labelled as uninstalled and unmeasured; the explicit Setup action confirms hardware before downloading. Selecting an installed model is explicit. A future/optional remote recommendation must present an explicit install action and an exact bounded download size when known.
 
 Optimization shows the configured model, current user setting, AFK recommended context when supported by valid measurements, measured rates and effective context, cache provenance, and a separate Apply action. A user override is stored separately from AFK's recommendation. Failed or cancelled measurement leaves settings untouched.
 
@@ -23,3 +23,17 @@ All runtime and remote input is length, shape, and numeric-bound validated. Subp
 ## Verification
 
 Regression tests cover MoE/dense residency, exact size, sharded size, malformed and huge metadata, KV derivation/fallback, changed model digest/runtime, measurement versus estimate, override versus recommendation, cancellation, and partial runtime failure. Run focused checks, independent boundary review, then the canonical full repository gate and exact-SHA local build/deployment qualification.
+
+## Component review
+
+Utility V1 reviews each component for a faster or simpler replacement at its actual scale:
+
+| Component | Candidate considered | V1 decision and evidence |
+| --- | --- | --- |
+| Ollama inventory adapter | A new HTTP client dependency or a separate service | Keep bounded standard-library loopback calls. The quick path makes three calls, returns a capped 128-model report, and observed 22 local models in about one second on the qualification PC. Optional `/api/show` enrichment is capped at eight finalists. |
+| Native model list | Virtualized or web-rendered list | Keep WinForms `ListView` inside the existing shell. The contract caps inventory at 128 models, and native keyboard and screen-reader controls require no new runtime. Revisit virtualization if measured list rendering becomes slow at that cap. |
+| Native JSON bridge | New IPC framework | Keep the verified owned-interpreter process and `System.Text.Json`. The native parser has a size/depth/schema cap and subprocesses use argument arrays and cancellation. |
+| Optimizer evidence | New cache/database | Keep the bounded atomic cache, with a deferred commit for explicit fresh measurements. A partial or cancelled ladder cannot publish a fresh recommendation or partial cache. |
+| Inference runtime | Reopen llama.cpp lineage | Keep Ollama for production. A replacement needs a new measured product win and separate ownership/integrity review. |
+
+These are current decisions, not permanent bans on replacement. Compare observable startup, response time, memory, correctness, dependency and maintenance cost before changing them.
