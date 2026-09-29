@@ -4,7 +4,7 @@ internal static class UtilityViewParts
 {
     public static Label Heading(string text) => new()
     {
-        Text = text, AutoSize = true, Font = Theme.Display(27, FontStyle.Bold),
+        Text = text, AutoSize = true, UseMnemonic = false, Font = Theme.Display(27, FontStyle.Bold),
         ForeColor = Theme.PrimaryText, Margin = new Padding(0, 0, 0, 8)
     };
 

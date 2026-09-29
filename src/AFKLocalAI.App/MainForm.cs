@@ -51,7 +51,7 @@ public sealed class MainForm : Form
     private readonly Panel _content = new() { Dock = DockStyle.Fill, Padding = new Padding(56, 44, 56, 32) };
 
     // Setup screen.
-    private readonly Label _headline = new() { AutoSize = true };
+    private readonly Label _headline = new() { AutoSize = true, UseMnemonic = false };
     private readonly Label _subtitle = new() { AutoSize = true, MaximumSize = new Size(780, 0) };
     private readonly TableLayoutPanel _status = new() { AutoSize = true, Dock = DockStyle.Top, ColumnCount = 3 };
     private readonly TextBox _progress = new()
