@@ -157,7 +157,7 @@ public sealed class MainForm : Form
         _optimizationPage.CancelRequested += CancelUtilityOperation;
 
         _refreshTimer.Tick += (_, _) => Guard(OnRefreshTickAsync);
-        _content.Resize += (_, _) => { if (_screen == Screen.Home) SetPagePadding(home: true); };
+        _content.Resize += (_, _) => { if (_screen is Screen.Home or Screen.About) SetPagePadding(home: true); };
         Activated += (_, _) => Guard(OnActivatedAsync);
         FormClosing += OnFormClosing;
 
@@ -192,7 +192,7 @@ public sealed class MainForm : Form
     private Control BuildShell()
     {
         var shell = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = Theme.Background };
-        shell.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 228));
+        shell.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, LogicalToDeviceUnits(228)));
         shell.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         shell.Controls.Add(BuildSidebar(), 0, 0);
         shell.Controls.Add(_content, 1, 0);
@@ -201,17 +201,21 @@ public sealed class MainForm : Form
 
     private Control BuildSidebar()
     {
-        var panel = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Rail, Padding = new Padding(20, 26, 16, 20), Margin = Padding.Empty };
+        var panel = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Rail,
+            Padding = new Padding(LogicalToDeviceUnits(20), LogicalToDeviceUnits(26),
+                LogicalToDeviceUnits(16), LogicalToDeviceUnits(20)), Margin = Padding.Empty };
         panel.Paint += (_, eventArgs) =>
         {
             using var pen = new Pen(Theme.RailBorder);
             eventArgs.Graphics.DrawLine(pen, panel.Width - 1, 0, panel.Width - 1, panel.Height);
         };
         // The lockup lays itself out, so the name and channel never overlap at any scale.
-        var lockup = new TableLayoutPanel { AutoSize = true, ColumnCount = 2, RowCount = 2, Location = new Point(20, 26), BackColor = Theme.Rail };
+        var lockup = new TableLayoutPanel { AutoSize = true, ColumnCount = 2, RowCount = 2,
+            Location = new Point(LogicalToDeviceUnits(20), LogicalToDeviceUnits(26)), BackColor = Theme.Rail };
         lockup.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         lockup.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        var mark = new PictureBox { Size = new Size(36, 36), AccessibleName = "AFK AI", Margin = new Padding(0, 2, 12, 0) };
+        var mark = new PictureBox { Size = LogicalToDeviceUnits(new Size(36, 36)), AccessibleName = "AFK AI",
+            Margin = new Padding(0, LogicalToDeviceUnits(2), LogicalToDeviceUnits(12), 0) };
         mark.Paint += (_, eventArgs) => Theme.PaintWordmark(eventArgs.Graphics, new Rectangle(1, 1, mark.Width - 3, mark.Height - 3));
         var name = new Label { Text = "AFK AI", AutoSize = true, Font = Theme.Display(14, FontStyle.Bold), ForeColor = Theme.PrimaryText, Margin = Padding.Empty };
         var version = new Label { Text = $"{ChannelLabel} · {_product.DisplayVersion}", AutoSize = true, Font = Theme.Font(8.5f), ForeColor = Theme.MutedText, Margin = new Padding(1, 0, 0, 0) };
@@ -224,7 +228,8 @@ public sealed class MainForm : Form
         var navigation = new FlowLayoutPanel
         {
             FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true,
-            Location = new Point(12, 132), Width = 200, BackColor = Theme.Rail
+            Location = new Point(LogicalToDeviceUnits(12), LogicalToDeviceUnits(132)),
+            Width = LogicalToDeviceUnits(200), BackColor = Theme.Rail
         };
         navigation.Controls.Add(NavigationButton(Screen.Home, "Home", () => Guard(async () =>
         {
@@ -290,14 +295,14 @@ public sealed class MainForm : Form
         }
     }
 
-    private static Button SideButton(string text, Action action)
+    private Button SideButton(string text, Action action)
     {
         var button = new WorkbenchButton
         {
-            Text = text, Width = 196, Height = 40, TextAlign = ContentAlignment.MiddleLeft,
+            Text = text, Width = LogicalToDeviceUnits(196), Height = LogicalToDeviceUnits(40), TextAlign = ContentAlignment.MiddleLeft,
             FlatStyle = FlatStyle.Flat, BackColor = Theme.Rail, ForeColor = Theme.SecondaryText,
-            Font = Theme.Font(10), Cursor = Cursors.Hand, Margin = new Padding(0, 0, 0, 2),
-            Padding = new Padding(12, 0, 0, 0), AccessibleName = text, UseMnemonic = false
+            Font = Theme.Font(10), Cursor = Cursors.Hand, Margin = new Padding(0, 0, 0, LogicalToDeviceUnits(2)),
+            Padding = new Padding(LogicalToDeviceUnits(12), 0, 0, 0), AccessibleName = text, UseMnemonic = false
         };
         button.FlatAppearance.BorderSize = 0;
         button.FlatAppearance.MouseOverBackColor = Theme.Elevated;
@@ -1270,7 +1275,7 @@ public sealed class MainForm : Form
         CancelUtilityOperation();
         _screen = Screen.About;
         UpdateNavigation();
-        SetPagePadding(home: false);
+        SetPagePadding(home: true);
         _refreshTimer.Stop();
         AcceptButton = null;
         _content.Controls.Clear();

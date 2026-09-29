@@ -142,6 +142,9 @@ public sealed class WorkbenchButton : Button
 
     protected override void OnPaint(PaintEventArgs e)
     {
+        // UserPaint does not clear the square corners around the rounded fill.
+        // Paint them with the containing surface so no dark strips remain.
+        e.Graphics.Clear(Parent?.BackColor ?? Theme.Background);
         var highContrast = SystemInformation.HighContrast;
         var fill = highContrast ? SystemColors.Control : !Enabled ? Theme.Elevated :
             _pressed ? FlatAppearance.MouseDownBackColor :

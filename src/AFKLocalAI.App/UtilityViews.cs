@@ -102,7 +102,7 @@ public sealed class ModelsFitPage : UserControl
         UtilityViewParts.Add(stack, UtilityViewParts.Heading("Models & fit"));
         UtilityViewParts.Add(stack, UtilityViewParts.Body("A clear view of what is installed and what this PC can run."));
         UtilityViewParts.Add(stack, UtilityViewParts.Section("This PC"));
-        var machine = new SurfacePanel { Height = 99, Padding = new Padding(18, 9, 18, 9) };
+        var machine = new SurfacePanel { Height = LogicalToDeviceUnits(99), Padding = new Padding(18, 9, 18, 9) };
         var machineGrid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, BackColor = Theme.Surface };
         machineGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 72));
         machineGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 28));
@@ -114,7 +114,7 @@ public sealed class ModelsFitPage : UserControl
         machineGrid.Controls.Add(HardwareFact("VRAM", _vram), 1, 1);
         machine.Controls.Add(machineGrid);
         UtilityViewParts.Add(stack, machine);
-        var recommendationSurface = new SurfacePanel { Height = 139, Padding = new Padding(18, 11, 18, 9), Margin = new Padding(0, 11, 0, 0) };
+        var recommendationSurface = new SurfacePanel { Height = LogicalToDeviceUnits(139), Padding = new Padding(18, 11, 18, 9), Margin = new Padding(0, 11, 0, 0) };
         var recommendationStack = UtilityViewParts.Stack();
         recommendationStack.BackColor = Theme.Surface;
         _choiceHeading.Margin = new Padding(0, 0, 0, 6);
@@ -135,15 +135,16 @@ public sealed class ModelsFitPage : UserControl
         _models.Columns.Add("Fit at 8K", 125);
         _models.Columns.Add("Size", 90);
         _models.Columns.Add("State", 125);
-        var rows = new ImageList { ImageSize = new Size(1, 32), ColorDepth = ColorDepth.Depth32Bit };
-        rows.Images.Add(new Bitmap(1, 32));
+        var rowHeight = LogicalToDeviceUnits(32);
+        var rows = new ImageList { ImageSize = new Size(1, rowHeight), ColorDepth = ColorDepth.Depth32Bit };
+        rows.Images.Add(new Bitmap(1, rowHeight));
         _models.SmallImageList = rows;
         _models.DrawColumnHeader += (_, e) => e.DrawDefault = true;
         _models.DrawSubItem += DrawModelCell;
         _models.Resize += (_, _) => ResizeModelColumns();
         UtilityViewParts.Add(stack, _models);
         UtilityViewParts.Add(stack, UtilityViewParts.Section("Why this model?"));
-        var detailSurface = new SurfacePanel { Height = 194, Padding = new Padding(16, 12, 16, 12), Fill = Theme.Sunken };
+        var detailSurface = new SurfacePanel { Height = LogicalToDeviceUnits(194), Padding = new Padding(16, 12, 16, 12), Fill = Theme.Sunken };
         var detailLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, BackColor = Theme.Sunken };
         detailLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         detailLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -188,7 +189,16 @@ public sealed class ModelsFitPage : UserControl
     private void ResizeModelColumns()
     {
         if (_models.Columns.Count != 4) return;
-        _models.Columns[0].Width = Math.Max(240, _models.ClientSize.Width - 125 - 90 - 125 - 4);
+        // Keep the state columns readable while giving long local model names
+        // room at the minimum window width.
+        var fit = LogicalToDeviceUnits(95);
+        var size = LogicalToDeviceUnits(70);
+        var state = LogicalToDeviceUnits(90);
+        _models.Columns[1].Width = fit;
+        _models.Columns[2].Width = size;
+        _models.Columns[3].Width = state;
+        _models.Columns[0].Width = Math.Max(LogicalToDeviceUnits(260),
+            _models.ClientSize.Width - fit - size - state - LogicalToDeviceUnits(4));
     }
 
     private void DrawModelCell(object? sender, DrawListViewSubItemEventArgs e)
@@ -258,7 +268,7 @@ public sealed class ModelsFitPage : UserControl
                 UtilityViewParts.Gib(model.WeightsBytes), state }) { Tag = model.Tag, ImageIndex = 0 };
             _models.Items.Add(item);
         }
-        _models.Height = Math.Clamp(32 + _models.Items.Count * 32, 96, 260);
+        _models.Height = LogicalToDeviceUnits(Math.Clamp(32 + _models.Items.Count * 32, 96, 260));
         _models.Visible = report.Models.Count > 0;
         _installedHeading.Visible = report.Models.Count > 0;
         var chosen = report.Recommendation?.Model ?? report.Models.FirstOrDefault()?.Tag;
@@ -345,7 +355,7 @@ public sealed class OptimizationPage : UserControl
 
     public OptimizationPage()
     {
-        _measurementSurface = new SurfacePanel { Height = 130, Padding = new Padding(12, 10, 12, 10) };
+        _measurementSurface = new SurfacePanel { Height = LogicalToDeviceUnits(130), Padding = new Padding(12, 10, 12, 10) };
         _detailSurface = Theme.DetailSurface(_detail, 150);
         Dock = DockStyle.Fill;
         AutoScroll = true;
@@ -356,7 +366,7 @@ public sealed class OptimizationPage : UserControl
         UtilityViewParts.Add(stack, UtilityViewParts.Section("Selected model"));
         _model.Font = Theme.Mono(10);
         UtilityViewParts.Add(stack, _model);
-        _summary = new TableLayoutPanel { Dock = DockStyle.Top, Height = 118, ColumnCount = 2,
+        _summary = new TableLayoutPanel { Dock = DockStyle.Top, Height = LogicalToDeviceUnits(118), ColumnCount = 2,
             BackColor = Theme.Background, Margin = new Padding(0, 3, 0, 2) };
         _summary.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 60));
         _summary.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40));
@@ -401,8 +411,9 @@ public sealed class OptimizationPage : UserControl
         _measurements.Columns.Add("Prompt/s", 92);
         _measurements.Columns.Add("Decode/s", 94);
         _measurements.Columns.Add("Evidence", 220);
-        var rows = new ImageList { ImageSize = new Size(1, 31), ColorDepth = ColorDepth.Depth32Bit };
-        rows.Images.Add(new Bitmap(1, 31));
+        var rowHeight = LogicalToDeviceUnits(31);
+        var rows = new ImageList { ImageSize = new Size(1, rowHeight), ColorDepth = ColorDepth.Depth32Bit };
+        rows.Images.Add(new Bitmap(1, rowHeight));
         _measurements.SmallImageList = rows;
         _measurements.Dock = DockStyle.Fill;
         _measurementSurface.Controls.Add(_measurements);
@@ -449,7 +460,7 @@ public sealed class OptimizationPage : UserControl
         _optimization = null;
         _canApply = false;
         _model.Text = model;
-        _summary.Height = 150;
+        _summary.Height = LogicalToDeviceUnits(150);
         _recommended.Text = "Checking saved evidence…";
         _recommendationBasis.Text = "";
         _setting.Text = "Checking your setting…";
@@ -469,7 +480,7 @@ public sealed class OptimizationPage : UserControl
         _optimization = optimization;
         _canApply = canApply;
         _model.Text = model;
-        _summary.Height = optimization.RecommendedContext is null ? 150 : 118;
+        _summary.Height = LogicalToDeviceUnits(optimization.RecommendedContext is null ? 150 : 118);
         var measured = optimization.Measurements.FirstOrDefault(item =>
             item.Successful && item.Context == optimization.RecommendedContext);
         _recommended.Text = optimization.RecommendedContext is { } context
@@ -508,7 +519,7 @@ public sealed class OptimizationPage : UserControl
                 $"{(item.Source == "cache" ? "Cached" : "Measured")} · {item.MeasuredAt ?? "date unknown"}"
             }) { ImageIndex = 0 });
         }
-        _measurementSurface.Height = Math.Clamp(52 + _measurements.Items.Count * 32, 112, 240);
+        _measurementSurface.Height = LogicalToDeviceUnits(Math.Clamp(52 + _measurements.Items.Count * 32, 112, 240));
         _measurementSurface.Visible = _measurements.Items.Count > 0;
         _evidenceIntro.Text = _measurements.Items.Count == 0
             ? "No measurements yet. The estimates below explain excluded contexts."
