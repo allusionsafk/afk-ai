@@ -10,6 +10,7 @@
     <AssemblyName>AFKLocalAI</AssemblyName>
     <RootNamespace>AFKLocalAI.App</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\afk-ai.ico</ApplicationIcon>
     <Version>0.2.0-rc1</Version>
     <FileVersion>0.2.0.0</FileVersion>
     <AssemblyVersion>0.2.0.0</AssemblyVersion>
@@ -17,6 +18,7 @@
     <Company>AFK</Company>
   </PropertyGroup>
   <ItemGroup>
+    <EmbeddedResource Include="Assets\afk-ai.ico" />
     <Content Include="..\..\installer\version.json" Link="version.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\installer\*.ps1" Link="installer\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\ai-common.ps1" Link="ai-common.ps1" CopyToOutputDirectory="PreserveNewest" />

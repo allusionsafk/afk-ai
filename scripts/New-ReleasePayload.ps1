@@ -61,7 +61,8 @@ if (-not (Test-Path -LiteralPath $shellMetadata -PathType Leaf)) {
 # is copied.
 $runtimeIdentity = Join-Path $runtime 'afk-runtime.json'
 $runtimeInterpreter = Join-Path $runtime 'python/python.exe'
-foreach ($required in @($runtimeIdentity, $runtimeInterpreter)) {
+$runtimeLicence = Join-Path $runtime 'python/LICENSE.txt'
+foreach ($required in @($runtimeIdentity, $runtimeInterpreter, $runtimeLicence)) {
   if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
     throw "Owned Python runtime is incomplete: '$required' is missing. Run scripts/Get-PythonRuntime.ps1."
   }

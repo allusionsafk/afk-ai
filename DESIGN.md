@@ -48,19 +48,24 @@ are reflowed so they wrap to the window rather than to a console.
 
 ## Layout
 
-The shell is a single resizable window with a minimum logical size of 840×620.
-A compact header carries product name, version/channel, and Help. The main
-surface follows the current task:
+The shell is a single resizable window with a 980×650 logical minimum and a
+1120×760 default, fitted to the available work area. A 228 px paper rail carries
+the AFK mark, name, version and navigation. The current page has a quiet
+selected surface and semibold label. The main surface follows the current task:
 
-- setup uses a two-column layout above 980 px: machine status on the left and
-  action/progress on the right;
-- narrower windows stack action/progress below status;
+- setup keeps the prerequisite status together, followed by its message and
+  one primary recovery action;
 - daily home gives Open Chat the strongest placement, then service actions and
-  diagnostic/support utilities;
-- details expand inline at the bottom rather than opening a modal.
+  diagnostic/support utilities; its work area stays bounded and balances within
+  a wide window;
+- Models & fit keeps a dense installed-model list, with selected-model evidence
+  below it; Optimization separates AFK's recommendation, measured evidence,
+  current setting, and user override;
+- details expand inline rather than opening a modal, and Ready activity starts
+  collapsed.
 
-Spacing follows an 8 px base with 4, 8, 12, 16, 24, and 32 px steps. Group boxes
-use full subtle borders and 10–12 px corner radii. Do not use colored side
+Spacing follows an 8 px base with 4, 8, 12, 16, 24, and 32 px steps. Grouping
+surfaces have subtle borders and 10–12 px corner radii. Do not use colored side
 stripes, nested cards, or repeated icon-heading-description tile grids.
 
 ## Components
@@ -74,8 +79,10 @@ through symbol, label, and semantic color.
 
 ### Buttons
 
-Primary buttons use cyan fill and dark ink. Secondary buttons use the elevated
-surface and a full border. Text-link buttons are reserved for Support/About.
+Primary buttons use ink fill and light text. Secondary buttons use a quiet
+paper surface and a restrained border. Real WinForms buttons have modest
+rounded corners and visible keyboard focus. Text links disclose details or
+open support destinations.
 Every button has default, hover, pressed, focus, disabled, and busy behavior.
 Busy buttons retain their label with a concise changing verb such as
 `Checking…` or `Starting…`.
@@ -89,9 +96,16 @@ failure or the recovery action.
 
 ### Details and logs
 
-Details expand inline into a selectable monospace text area with Copy and Open
-Log Folder actions. The default collapsed summary always contains the user-level
-message and stable reason code.
+Details expand inline into a sunken paper surface with selectable, scrollable
+monospace machine text. Ordinary explanations remain in the system text face.
+The default collapsed summary always contains the user-level message and stable
+reason code. The Ready activity surface remains closed until requested.
+
+### Application mark
+
+The existing AFK A mark is used in the rail, title bar, executable, taskbar and
+shortcuts. The executable embeds a multi-resolution icon with transparent edges;
+the window uses the same icon resource.
 
 ### Empty and error states
 
