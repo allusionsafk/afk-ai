@@ -1,22 +1,12 @@
-using System.Runtime.InteropServices;
-
 namespace AFKLocalAI.App;
 
 public static class AppIcon
 {
     public static Icon Create()
     {
-        using var bitmap = new Bitmap(64, 64);
-        using (var graphics = Graphics.FromImage(bitmap))
-        {
-            graphics.Clear(Color.Transparent);
-            Theme.PaintWordmark(graphics, new Rectangle(4, 4, 56, 56));
-        }
-        var handle = bitmap.GetHicon();
-        try { return (Icon)Icon.FromHandle(handle).Clone(); }
-        finally { _ = DestroyIcon(handle); }
+        using var asset = typeof(AppIcon).Assembly.GetManifestResourceStream("AFKLocalAI.App.Assets.afk-ai.ico")
+            ?? throw new InvalidOperationException("AFK application icon resource is missing.");
+        using var icon = new Icon(asset);
+        return (Icon)icon.Clone();
     }
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool DestroyIcon(IntPtr handle);
 }

@@ -1,6 +1,7 @@
 # AFK LocalAI release payload. One tracked repo-relative file per line.
 .env.example
 LICENSE
+THIRD-PARTY-NOTICES.txt
 SECURITY.md
 SUPPORT.md
 ai-ab.ps1

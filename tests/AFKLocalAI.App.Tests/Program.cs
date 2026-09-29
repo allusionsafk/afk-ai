@@ -37,6 +37,8 @@ Check("display version", product.DisplayVersion == "0.2.0-rc1", product.DisplayV
 Check("file version", product.FileVersion == "0.2.0.0", product.FileVersion);
 Check("canonical executable", product.ExecutableName == "AFKLocalAI.exe", product.ExecutableName);
 Check("stable app id", product.AppId == "{8A8A2D4D-CE75-4A2D-A39B-56B4206F93D0}", product.AppId);
+Check("canonical source destination", product.Repository == "https://github.com/allusionsafk/afk-ai", product.Repository);
+Check("canonical support destination", product.SupportUrl == "https://github.com/allusionsafk/afk-ai/issues/new/choose", product.SupportUrl);
 
 var scratch = Path.Combine(root, "build", "dotnet-core-tests", Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(scratch);
@@ -219,6 +221,30 @@ try
 
     using var icon = AppIcon.Create();
     Check("application icon is available", icon.Width >= 32 && icon.Height >= 32, $"{icon.Width}x{icon.Height}");
+    var iconAsset = Path.Combine(root, "src", "AFKLocalAI.App", "Assets", "afk-ai.ico");
+    var iconProject = File.ReadAllText(Path.Combine(root, "src", "AFKLocalAI.App", "AFKLocalAI.App.csproj"));
+    Check("AFK icon is embedded by the app project", iconProject.Contains("<ApplicationIcon>Assets\\afk-ai.ico</ApplicationIcon>", StringComparison.Ordinal));
+    Check("installer uses the AFK icon", File.ReadAllText(Path.Combine(root, "installer", "AFKLocalAI.iss"))
+        .Contains("SetupIconFile=..\\src\\AFKLocalAI.App\\Assets\\afk-ai.ico", StringComparison.Ordinal));
+    Check("AFK icon asset exists", File.Exists(iconAsset));
+    Check("AFK window uses the embedded icon asset", typeof(AppIcon).Assembly.GetManifestResourceNames()
+        .Contains("AFKLocalAI.App.Assets.afk-ai.ico", StringComparer.Ordinal));
+    if (File.Exists(iconAsset))
+    {
+        var bytes = File.ReadAllBytes(iconAsset);
+        var sizes = new HashSet<int>();
+        if (bytes.Length >= 6 && BitConverter.ToUInt16(bytes, 2) == 1)
+        {
+            var count = BitConverter.ToUInt16(bytes, 4);
+            for (var index = 0; index < count && 6 + index * 16 + 15 < bytes.Length; index++)
+            {
+                var raw = bytes[6 + index * 16];
+                sizes.Add(raw == 0 ? 256 : raw);
+            }
+        }
+        Check("AFK icon covers taskbar and Explorer sizes", new[] { 16, 20, 24, 32, 48, 64, 128, 256 }.All(sizes.Contains),
+            string.Join(",", sizes.Order()));
+    }
     Check("shell exposes accessible setup labels", MainForm.AccessibilityContract.Contains("Prerequisite status") &&
         MainForm.AccessibilityContract.Contains("Setup progress"));
     Check("shell exposes accessible home labels", MainForm.AccessibilityContract.Contains("Product status") &&

@@ -30,9 +30,9 @@ def test_release_identity_is_canonical() -> None:
         "architecture": "x64",
         "app_id": "{8A8A2D4D-CE75-4A2D-A39B-56B4206F93D0}",
         "publisher": "AFK",
-        "repository": "https://github.com/allusionsafk/localai-windows-starter",
+        "repository": "https://github.com/allusionsafk/afk-ai",
         "support_url": (
-            "https://github.com/allusionsafk/localai-windows-starter/issues/new/choose"
+            "https://github.com/allusionsafk/afk-ai/issues/new/choose"
         ),
     }
 

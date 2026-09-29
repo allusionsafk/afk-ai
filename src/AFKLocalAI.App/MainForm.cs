@@ -31,6 +31,7 @@ public sealed class MainForm : Form
     private PreflightSummary? _preflight;
     private string _pendingAction = "retry";
     private Screen _screen = Screen.Setup;
+    private readonly Dictionary<Screen, Button> _navigation = new();
 
     private HomeModel _home = HomeModel.Initial;
     private Task<IntegrityResult>? _integrity;
@@ -58,6 +59,7 @@ public sealed class MainForm : Form
         Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, BorderStyle = BorderStyle.FixedSingle,
         AccessibleName = "Setup progress", Dock = DockStyle.Fill
     };
+    private readonly SurfacePanel _setupLogSurface;
     private readonly ProgressBar _setupDownload = new()
     {
         Dock = DockStyle.Top, Height = 8, Minimum = 0, Maximum = 100, Visible = false,
@@ -87,6 +89,10 @@ public sealed class MainForm : Form
         Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, BorderStyle = BorderStyle.FixedSingle,
         AccessibleName = "Activity", Dock = DockStyle.Fill, Visible = false
     };
+    private readonly SurfacePanel _homeActivitySurface;
+    private readonly Label _homeActivityHeading = new() { AutoSize = true, Text = "Activity" };
+    private readonly Label _homeServicesHeading = new() { AutoSize = true, Text = "Services" };
+    private bool _homeDetailsExpanded;
     private HomeAction _homeAction = HomeAction.Wait;
 
     public MainForm(AppPaths paths, ProductInfo product, bool aboutOnly, Icon icon)
@@ -97,6 +103,8 @@ public sealed class MainForm : Form
         _controller = new ProvisioningController(paths);
         _log = new LifecycleLog(paths);
         _state = _stateStore.LoadOrCreate();
+        _setupLogSurface = Theme.DetailSurface(_progress, 180);
+        _homeActivitySurface = Theme.DetailSurface(_homeActivity, 170);
 
         Text = $"AFK AI  {product.DisplayVersion}";
         Icon = icon;
@@ -127,12 +135,8 @@ public sealed class MainForm : Form
         _homeStop.Click += (_, _) => Guard(StopAsync);
         _homeCancel.Click += (_, _) => _operation?.Cancel();
         _homeDiagnostics.Click += (_, _) => Guard(OpenDiagnosticsAsync);
-        _progressLabel.LinkClicked += (_, _) => SetSetupDetails(!_progress.Visible);
-        _homeDetailsToggle.LinkClicked += (_, _) =>
-        {
-            _homeServices.Visible = !_homeServices.Visible;
-            _homeDetailsToggle.Text = _homeServices.Visible ? "Hide details" : "Show details";
-        };
+        _progressLabel.LinkClicked += (_, _) => SetSetupDetails(!_setupLogSurface.Visible);
+        _homeDetailsToggle.LinkClicked += (_, _) => SetHomeDetails(!_homeDetailsExpanded);
 
         _modelsPage.RefreshRequested += () => Guard(RefreshModelsAsync);
         _modelsPage.SetupRequested += () => Guard(async () => { RenderSetup(); await RefreshPreflightAsync(); });
@@ -153,6 +157,7 @@ public sealed class MainForm : Form
         _optimizationPage.CancelRequested += CancelUtilityOperation;
 
         _refreshTimer.Tick += (_, _) => Guard(OnRefreshTickAsync);
+        _content.Resize += (_, _) => { if (_screen is Screen.Home or Screen.About) SetPagePadding(home: true); };
         Activated += (_, _) => Guard(OnActivatedAsync);
         FormClosing += OnFormClosing;
 
@@ -175,10 +180,19 @@ public sealed class MainForm : Form
     private static Size FitTo(Size bounds, Size size) =>
         new(Math.Min(bounds.Width, size.Width), Math.Min(bounds.Height, size.Height));
 
+    private void SetPagePadding(bool home)
+    {
+        var horizontal = home
+            ? Math.Max(LogicalToDeviceUnits(56), (_content.ClientSize.Width - LogicalToDeviceUnits(820)) / 2)
+            : LogicalToDeviceUnits(56);
+        var padding = new Padding(horizontal, LogicalToDeviceUnits(44), horizontal, LogicalToDeviceUnits(32));
+        if (!_content.Padding.Equals(padding)) _content.Padding = padding;
+    }
+
     private Control BuildShell()
     {
         var shell = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = Theme.Background };
-        shell.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 228));
+        shell.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, LogicalToDeviceUnits(228)));
         shell.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         shell.Controls.Add(BuildSidebar(), 0, 0);
         shell.Controls.Add(_content, 1, 0);
@@ -187,20 +201,24 @@ public sealed class MainForm : Form
 
     private Control BuildSidebar()
     {
-        var panel = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Rail, Padding = new Padding(20, 26, 16, 20), Margin = Padding.Empty };
+        var panel = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Rail,
+            Padding = new Padding(LogicalToDeviceUnits(20), LogicalToDeviceUnits(26),
+                LogicalToDeviceUnits(16), LogicalToDeviceUnits(20)), Margin = Padding.Empty };
         panel.Paint += (_, eventArgs) =>
         {
             using var pen = new Pen(Theme.RailBorder);
             eventArgs.Graphics.DrawLine(pen, panel.Width - 1, 0, panel.Width - 1, panel.Height);
         };
         // The lockup lays itself out, so the name and channel never overlap at any scale.
-        var lockup = new TableLayoutPanel { AutoSize = true, ColumnCount = 2, RowCount = 2, Location = new Point(20, 26), BackColor = Theme.Rail };
+        var lockup = new TableLayoutPanel { AutoSize = true, ColumnCount = 2, RowCount = 2,
+            Location = new Point(LogicalToDeviceUnits(20), LogicalToDeviceUnits(26)), BackColor = Theme.Rail };
         lockup.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         lockup.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        var mark = new PictureBox { Size = new Size(36, 36), AccessibleName = "AFK AI", Margin = new Padding(0, 2, 12, 0) };
+        var mark = new PictureBox { Size = LogicalToDeviceUnits(new Size(36, 36)), AccessibleName = "AFK AI",
+            Margin = new Padding(0, LogicalToDeviceUnits(2), LogicalToDeviceUnits(12), 0) };
         mark.Paint += (_, eventArgs) => Theme.PaintWordmark(eventArgs.Graphics, new Rectangle(1, 1, mark.Width - 3, mark.Height - 3));
         var name = new Label { Text = "AFK AI", AutoSize = true, Font = Theme.Display(14, FontStyle.Bold), ForeColor = Theme.PrimaryText, Margin = Padding.Empty };
-        var version = new Label { Text = $"Beta · {_product.DisplayVersion}", AutoSize = true, Font = Theme.Font(8.5f), ForeColor = Theme.MutedText, Margin = new Padding(1, 0, 0, 0) };
+        var version = new Label { Text = $"{ChannelLabel} · {_product.DisplayVersion}", AutoSize = true, Font = Theme.Font(8.5f), ForeColor = Theme.MutedText, Margin = new Padding(1, 0, 0, 0) };
         lockup.Controls.Add(mark, 0, 0);
         lockup.SetRowSpan(mark, 2);
         lockup.Controls.Add(name, 1, 0);
@@ -210,28 +228,29 @@ public sealed class MainForm : Form
         var navigation = new FlowLayoutPanel
         {
             FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true,
-            Location = new Point(12, 132), Width = 200, BackColor = Theme.Rail
+            Location = new Point(LogicalToDeviceUnits(12), LogicalToDeviceUnits(132)),
+            Width = LogicalToDeviceUnits(200), BackColor = Theme.Rail
         };
-        navigation.Controls.Add(SideButton("Home", () => Guard(async () =>
+        navigation.Controls.Add(NavigationButton(Screen.Home, "Home", () => Guard(async () =>
         {
             if (AppModeResolver.Resolve(_state) != AppMode.Home) { RenderSetup(); return; }
             RenderHome();
             _refreshTimer.Start();
             await RefreshHomeAsync(qualify: _home.NeedsQualification);
         })));
-        navigation.Controls.Add(SideButton("Setup & repair", () => Guard(async () =>
+        navigation.Controls.Add(NavigationButton(Screen.Setup, "Setup & repair", () => Guard(async () =>
         {
             if (IsBusy) return;
             RenderSetup();
             await RefreshPreflightAsync();
         })));
-        navigation.Controls.Add(SideButton("Models & fit", () => Guard(async () =>
+        navigation.Controls.Add(NavigationButton(Screen.Models, "Models & fit", () => Guard(async () =>
         {
             if (IsBusy) return;
             RenderModels();
             await RefreshModelsAsync();
         })));
-        navigation.Controls.Add(SideButton("Optimization", () => Guard(async () =>
+        navigation.Controls.Add(NavigationButton(Screen.Optimization, "Optimization", () => Guard(async () =>
         {
             if (IsBusy) return;
             RenderOptimization();
@@ -239,8 +258,9 @@ public sealed class MainForm : Form
         })));
         navigation.Controls.Add(SideButton("Diagnostics", () => Guard(OpenDiagnosticsAsync)));
         navigation.Controls.Add(SideButton("Data folder", () => OpenPath(_paths.DataRoot)));
-        navigation.Controls.Add(SideButton("About", ShowAbout));
+        navigation.Controls.Add(NavigationButton(Screen.About, "About", ShowAbout));
         panel.Controls.Add(navigation);
+        UpdateNavigation();
 
         var support = SideButton("Support", () => OpenExternal(_product.SupportUrl));
         support.AccessibleName = "Open support";
@@ -254,14 +274,35 @@ public sealed class MainForm : Form
         return panel;
     }
 
-    private static Button SideButton(string text, Action action)
+    private Button NavigationButton(Screen screen, string text, Action action)
     {
-        var button = new Button
+        var button = SideButton(text, action);
+        _navigation.Add(screen, button);
+        return button;
+    }
+
+    private void UpdateNavigation()
+    {
+        foreach (var (screen, button) in _navigation)
         {
-            Text = text, Width = 196, Height = 38, TextAlign = ContentAlignment.MiddleLeft,
+            var selected = screen == _screen;
+            button.BackColor = selected ? Theme.Surface : Theme.Rail;
+            button.ForeColor = selected ? Theme.PrimaryText : Theme.SecondaryText;
+            button.Font = Theme.Font(10, selected ? FontStyle.Bold : FontStyle.Regular);
+            button.FlatAppearance.BorderSize = selected ? 1 : 0;
+            button.FlatAppearance.BorderColor = Theme.SurfaceBorder;
+            button.Invalidate();
+        }
+    }
+
+    private Button SideButton(string text, Action action)
+    {
+        var button = new WorkbenchButton
+        {
+            Text = text, Width = LogicalToDeviceUnits(196), Height = LogicalToDeviceUnits(40), TextAlign = ContentAlignment.MiddleLeft,
             FlatStyle = FlatStyle.Flat, BackColor = Theme.Rail, ForeColor = Theme.SecondaryText,
-            Font = Theme.Font(10), Cursor = Cursors.Hand, Margin = new Padding(0, 0, 0, 2),
-            Padding = new Padding(8, 0, 0, 0), AccessibleName = text, UseMnemonic = false
+            Font = Theme.Font(10), Cursor = Cursors.Hand, Margin = new Padding(0, 0, 0, LogicalToDeviceUnits(2)),
+            Padding = new Padding(LogicalToDeviceUnits(12), 0, 0, 0), AccessibleName = text, UseMnemonic = false
         };
         button.FlatAppearance.BorderSize = 0;
         button.FlatAppearance.MouseOverBackColor = Theme.Elevated;
@@ -324,6 +365,8 @@ public sealed class MainForm : Form
     {
         CancelUtilityOperation();
         _screen = Screen.Home;
+        UpdateNavigation();
+        SetPagePadding(home: true);
         _content.Controls.Clear();
         _homeStatus.Font = Theme.Font(10, FontStyle.Bold);
         _homeStatus.Margin = new Padding(2, 0, 0, 6);
@@ -342,11 +385,16 @@ public sealed class MainForm : Form
         _homeDetailsToggle.LinkColor = Theme.Link;
         _homeDetailsToggle.ActiveLinkColor = Theme.Link;
         _homeDetailsToggle.Font = Theme.Font(9.5f);
-        _homeActivity.BackColor = Theme.Sunken;
-        _homeActivity.ForeColor = Theme.SecondaryText;
-        _homeActivity.Font = Theme.Mono(9);
         _homeServices.BackColor = Theme.Surface;
         _homeServices.Padding = new Padding(18, 10, 18, 10);
+        _homeServicesHeading.Font = Theme.Font(10, FontStyle.Bold);
+        _homeServicesHeading.ForeColor = Theme.PrimaryText;
+        _homeServicesHeading.Dock = DockStyle.Top;
+        _homeServicesHeading.Padding = new Padding(0, 12, 0, 5);
+        _homeActivityHeading.Font = Theme.Font(10, FontStyle.Bold);
+        _homeActivityHeading.ForeColor = Theme.PrimaryText;
+        _homeActivityHeading.Dock = DockStyle.Top;
+        _homeActivityHeading.Padding = new Padding(0, 15, 0, 5);
 
         var header = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(0, 0, 0, 18) };
         header.Controls.Add(_homeStatus);
@@ -360,11 +408,9 @@ public sealed class MainForm : Form
 
         var details = new Panel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(0, 6, 0, 6) };
         details.Controls.Add(_homeServices);
+        details.Controls.Add(_homeServicesHeading);
         details.Controls.Add(_homeDetailsToggle);
         _homeDetailsToggle.Dock = DockStyle.Top;
-
-        var activityHost = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 10, 0, 10) };
-        activityHost.Controls.Add(_homeActivity);
 
         var privacy = new Label
         {
@@ -375,13 +421,26 @@ public sealed class MainForm : Form
         // Room for two lines at any scale, so a narrow window wraps instead of clipping.
         privacy.Height = privacy.Padding.Top + 2 * privacy.Font.Height + LogicalToDeviceUnits(6);
 
-        _content.Controls.Add(activityHost);
+        _content.Controls.Add(_homeActivitySurface);
+        _content.Controls.Add(_homeActivityHeading);
         _content.Controls.Add(details);
         _content.Controls.Add(actions);
         _content.Controls.Add(header);
         _content.Controls.Add(privacy);
         AcceptButton = _homePrimary;
+        SetHomeDetails(false);
         RenderHomeState();
+    }
+
+    private void SetHomeDetails(bool expanded)
+    {
+        _homeDetailsExpanded = expanded;
+        _homeDetailsToggle.Text = expanded ? "Hide details" : "Show details";
+        _homeServices.Visible = expanded;
+        _homeServicesHeading.Visible = expanded;
+        var showActivity = expanded && _homeActivity.TextLength > 0;
+        _homeActivityHeading.Visible = showActivity;
+        _homeActivitySurface.Visible = showActivity;
     }
 
     private void RenderHomeState()
@@ -666,15 +725,15 @@ public sealed class MainForm : Form
     private void ClearActivity()
     {
         _homeActivity.Clear();
-        _homeActivity.Visible = true;
+        if (_screen == Screen.Home) SetHomeDetails(_homeDetailsExpanded);
     }
 
     private void AppendActivity(string? text)
     {
         if (InvokeRequired) { BeginInvoke(() => AppendActivity(text)); return; }
         if (string.IsNullOrWhiteSpace(text) || _homeActivity.IsDisposed) return;
-        _homeActivity.Visible = true;
         _homeActivity.AppendText((string.IsNullOrEmpty(_homeActivity.Text) ? "" : Environment.NewLine) + text.Trim());
+        if (_screen == Screen.Home && _homeDetailsExpanded) SetHomeDetails(true);
     }
 
     // --------------------------------------------------------- Models & fit
@@ -683,6 +742,8 @@ public sealed class MainForm : Form
     {
         CancelUtilityOperation();
         _screen = Screen.Models;
+        UpdateNavigation();
+        SetPagePadding(home: false);
         _refreshTimer.Stop();
         _content.Controls.Clear();
         _content.Controls.Add(_modelsPage);
@@ -694,6 +755,8 @@ public sealed class MainForm : Form
     {
         CancelUtilityOperation();
         _screen = Screen.Optimization;
+        UpdateNavigation();
+        SetPagePadding(home: false);
         _refreshTimer.Stop();
         _content.Controls.Clear();
         _content.Controls.Add(_optimizationPage);
@@ -873,6 +936,8 @@ public sealed class MainForm : Form
     {
         CancelUtilityOperation();
         _screen = Screen.Setup;
+        UpdateNavigation();
+        SetPagePadding(home: false);
         _refreshTimer.Stop();
         _content.Controls.Clear();
         _headline.Text = _state.SetupCompleted ? "Setup & repair" : "Let’s get this PC ready";
@@ -899,9 +964,6 @@ public sealed class MainForm : Form
         _setupMessage.Text = "Checking this PC…";
         _setupStage.Font = Theme.Font(10);
         _setupStage.ForeColor = Theme.SecondaryText;
-        _progress.BackColor = Theme.Sunken;
-        _progress.ForeColor = Theme.SecondaryText;
-        _progress.Font = Theme.Mono(9);
         _progressLabel.Font = Theme.Font(9.5f);
         _progressLabel.LinkColor = _progressLabel.ActiveLinkColor = Theme.Link;
         _progress.Text = "Waiting for the prerequisite check…";
@@ -918,7 +980,7 @@ public sealed class MainForm : Form
         messageHost.Controls.Add(_setupMessage);
         messageHost.Controls.Add(_setupStage);
         var progressHost = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 6, 0, 16) };
-        progressHost.Controls.Add(_progress);
+        progressHost.Controls.Add(_setupLogSurface);
         progressHost.Controls.Add(_setupDownload);
         SetSetupDetails(false);
         // The next step sits right under the message that explains it.
@@ -956,7 +1018,8 @@ public sealed class MainForm : Form
     /// <summary>The engine's full log is one click away; it opens by itself while setup runs.</summary>
     private void SetSetupDetails(bool visible)
     {
-        _progress.Visible = visible;
+        _setupLogSurface.Visible = visible;
+        _progress.Visible = true;
         _progressLabel.Text = visible ? "Hide setup details" : "Show setup details";
     }
 
@@ -1211,23 +1274,64 @@ public sealed class MainForm : Form
     {
         CancelUtilityOperation();
         _screen = Screen.About;
+        UpdateNavigation();
+        SetPagePadding(home: true);
         _refreshTimer.Stop();
+        AcceptButton = null;
         _content.Controls.Clear();
-        _content.Controls.Add(Body($"Version {_product.DisplayVersion}  •  Beta\n\nA local-first AI workspace for Windows. Chat runs on this PC.\n\nSource: {_product.Repository}\nSupport: {_product.SupportUrl}\n\nAFK AI is not affiliated with the upstream LocalAI project by mudler."));
-        _content.Controls.Add(Heading("About AFK AI", 25));
+
+        var heading = new Label
+        {
+            Text = "AFK AI", AutoSize = true, Dock = DockStyle.Top,
+            Padding = new Padding(0, 0, 0, 4),
+            Font = Theme.Display(28, FontStyle.Bold), ForeColor = Theme.PrimaryText
+        };
+        var version = new Label
+        {
+            Text = $"Version {_product.DisplayVersion}  ·  {ChannelLabel}", AutoSize = true, Dock = DockStyle.Top,
+            Padding = new Padding(0, 0, 0, 28),
+            Font = Theme.Font(10), ForeColor = Theme.MutedText
+        };
+        var identity = new Label
+        {
+            Text = "Local-first AI for Windows.\nYour models, chats and inference stay on this PC by default.",
+            AutoSize = true, Dock = DockStyle.Top, MaximumSize = new Size(760, 0),
+            Padding = new Padding(0, 0, 0, 32),
+            Font = Theme.Font(11), ForeColor = Theme.SecondaryText
+        };
+        var links = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.TopDown,
+            WrapContents = false, BackColor = Theme.Background
+        };
+        links.Controls.Add(AboutLink("Source", "Open AFK AI source", () => OpenExternal(_product.Repository)));
+        links.Controls.Add(AboutLink("Support", "Open AFK AI support", () => OpenExternal(_product.SupportUrl)));
+        var notices = Path.Combine(_paths.ProgramRoot, "THIRD-PARTY-NOTICES.txt");
+        if (File.Exists(notices))
+            links.Controls.Add(AboutLink("Licences / third-party notices", "Open AFK AI licences and third-party notices", () =>
+                Process.Start(new ProcessStartInfo(notices) { UseShellExecute = true })));
+
+        // Docked top controls stack in reverse order of adding.
+        _content.Controls.Add(links);
+        _content.Controls.Add(identity);
+        _content.Controls.Add(version);
+        _content.Controls.Add(heading);
     }
 
-    private static Label Heading(string text, float size) => new()
+    private static LinkLabel AboutLink(string text, string accessibleName, Action open)
     {
-        Text = text, AutoSize = true, Dock = DockStyle.Top, Padding = new Padding(0, 0, 0, 12),
-        Font = Theme.Display(size, FontStyle.Bold), ForeColor = Theme.PrimaryText
-    };
+        var link = new LinkLabel
+        {
+            Text = text, AccessibleName = accessibleName, AutoSize = true,
+            Margin = new Padding(0, 0, 0, 12), Font = Theme.Font(10, FontStyle.Bold),
+            LinkColor = Theme.Link, ActiveLinkColor = Theme.Link,
+            LinkBehavior = LinkBehavior.AlwaysUnderline
+        };
+        link.LinkClicked += (_, _) => open();
+        return link;
+    }
 
-    private static Label Body(string text) => new()
-    {
-        Text = text, AutoSize = true, Dock = DockStyle.Top, MaximumSize = new Size(780, 0),
-        Font = Theme.Font(11), ForeColor = Theme.SecondaryText
-    };
+    private string ChannelLabel => _product.Channel == "prerelease" ? "Prerelease" : _product.Channel;
 
     private static void OpenPath(string path)
     {

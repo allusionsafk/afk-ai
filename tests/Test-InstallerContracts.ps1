@@ -113,6 +113,7 @@ if (Test-Path -LiteralPath $manifestPath) {
   Assert-True 'payload includes recovery entry point' ($entries -contains 'installer/Invoke-Recovery.ps1')
   Assert-True 'payload includes Python package' ($entries -contains 'src/localai/__init__.py')
   Assert-True 'payload includes support and licence' ($entries -contains 'SUPPORT.md' -and $entries -contains 'LICENSE')
+  Assert-True 'payload includes third-party notices' ($entries -contains 'THIRD-PARTY-NOTICES.txt')
   foreach ($entry in $entries) {
     Assert-True "manifest entry is relative: $entry" (-not [IO.Path]::IsPathRooted($entry) -and $entry -notmatch '(^|[\\/])\.\.([\\/]|$)')
     Assert-True "manifest source exists: $entry" (Test-Path -LiteralPath (Join-Path $Root $entry) -PathType Leaf)
@@ -323,6 +324,7 @@ if (Test-Path -LiteralPath $runtimeFetchPath) {
 if (Test-Path -LiteralPath $stagePath) {
   $stage = Get-ContractText -Path $stagePath
   Assert-True 'payload requires the owned runtime' ($stage -match '\[Parameter\(Mandatory\)\]\[string\]\$RuntimeRoot')
+  Assert-True 'payload requires bundled Python licence' ($stage -match 'python/LICENSE\.txt')
   Assert-True 'payload refuses links inside the runtime' ($stage -match 'ReparsePoint')
   Assert-True 'payload refuses a runtime with installed packages' ($stage -match 'site-packages')
   Assert-True 'payload hashes the runtime into the manifest' (

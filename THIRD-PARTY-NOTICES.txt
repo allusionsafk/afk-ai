@@ -1,0 +1,14 @@
+AFK AI licences and third-party notices
+
+AFK AI application
+  Licence: MIT
+  Full text: LICENSE
+
+Bundled Python runtime
+  Component: CPython Windows embeddable package
+  Publisher: Python Software Foundation
+  Full licence and incorporated-software notices: runtime\python\LICENSE.txt
+
+The Python licence file is supplied with the pinned runtime archive and is
+preserved in the installed runtime directory. AFK AI does not add Python
+packages to that runtime.

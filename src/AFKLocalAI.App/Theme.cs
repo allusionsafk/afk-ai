@@ -52,7 +52,7 @@ public static class Theme
 
     public static Button Button(string text, bool primary = false)
     {
-        var button = new Button
+        var button = new WorkbenchButton
         {
             Text = text,
             AutoSize = true,
@@ -72,6 +72,23 @@ public static class Theme
         button.FlatAppearance.MouseOverBackColor = primary ? ActionHover : Elevated;
         button.FlatAppearance.MouseDownBackColor = primary ? Color.Black : Sunken;
         return button;
+    }
+
+    public static SurfacePanel DetailSurface(TextBox textBox, int height)
+    {
+        textBox.BorderStyle = BorderStyle.None;
+        textBox.BackColor = Sunken;
+        textBox.ForeColor = SecondaryText;
+        textBox.Font = Mono(9);
+        textBox.Dock = DockStyle.Fill;
+        textBox.Visible = true;
+        var surface = new SurfacePanel
+        {
+            Dock = DockStyle.Top, Height = height, Padding = new Padding(14, 12, 14, 12),
+            Fill = Sunken, Stroke = SurfaceBorder
+        };
+        surface.Controls.Add(textBox);
+        return surface;
     }
 
     public static void Apply(Control root)
@@ -100,6 +117,74 @@ public static class Theme
         graphics.DrawLine(pen, bounds.Left + bounds.Width / 2f, top, right, bottom);
         graphics.DrawLine(pen, bounds.Left + bounds.Width * .38f, bounds.Top + bounds.Height * .60f,
             bounds.Left + bounds.Width * .62f, bounds.Top + bounds.Height * .60f);
+    }
+}
+
+/// <summary>A real WinForms button with the workbench's modest radius and visible states.</summary>
+public sealed class WorkbenchButton : Button
+{
+    private bool _hovered;
+    private bool _pressed;
+
+    public WorkbenchButton()
+    {
+        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+            ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+    }
+
+    protected override void OnMouseEnter(EventArgs e) { _hovered = true; Invalidate(); base.OnMouseEnter(e); }
+    protected override void OnMouseLeave(EventArgs e) { _hovered = false; _pressed = false; Invalidate(); base.OnMouseLeave(e); }
+    protected override void OnMouseDown(MouseEventArgs e) { _pressed = true; Invalidate(); base.OnMouseDown(e); }
+    protected override void OnMouseUp(MouseEventArgs e) { _pressed = false; Invalidate(); base.OnMouseUp(e); }
+    protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
+    protected override void OnLostFocus(EventArgs e) { Invalidate(); base.OnLostFocus(e); }
+    protected override void OnEnabledChanged(EventArgs e) { Invalidate(); base.OnEnabledChanged(e); }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        // UserPaint does not clear the square corners around the rounded fill.
+        // Paint them with the containing surface so no dark strips remain.
+        e.Graphics.Clear(Parent?.BackColor ?? Theme.Background);
+        var highContrast = SystemInformation.HighContrast;
+        var fill = highContrast ? SystemColors.Control : !Enabled ? Theme.Elevated :
+            _pressed ? FlatAppearance.MouseDownBackColor :
+            _hovered ? FlatAppearance.MouseOverBackColor : BackColor;
+        var ink = highContrast ? SystemColors.ControlText : Enabled ? ForeColor : Theme.MutedText;
+        var stroke = highContrast ? SystemColors.WindowText : FlatAppearance.BorderColor;
+        var rectangle = new Rectangle(1, 1, Math.Max(1, Width - 3), Math.Max(1, Height - 3));
+        using var path = RoundedPath(rectangle, LogicalToDeviceUnits(7));
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        using (var brush = new SolidBrush(fill)) e.Graphics.FillPath(brush, path);
+        if (highContrast || FlatAppearance.BorderSize > 0)
+        {
+            using var border = new Pen(stroke, 1);
+            e.Graphics.DrawPath(border, path);
+        }
+        var flags = TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis |
+            TextFormatFlags.NoPrefix | (TextAlign == ContentAlignment.MiddleLeft ? TextFormatFlags.Left : TextFormatFlags.HorizontalCenter);
+        var textRectangle = Rectangle.Inflate(ClientRectangle, -Math.Max(8, Padding.Left), -2);
+        TextRenderer.DrawText(e.Graphics, Text, Font, textRectangle, ink, flags);
+        if (Focused && ShowFocusCues)
+        {
+            var focus = Rectangle.Inflate(rectangle, -3, -3);
+            using var focusPath = RoundedPath(focus, LogicalToDeviceUnits(5));
+            using var pen = new Pen(highContrast ? SystemColors.Highlight : (fill == Theme.Action ? Color.White : Theme.Action), 1.5f)
+            { DashStyle = DashStyle.Dot };
+            e.Graphics.DrawPath(pen, focusPath);
+        }
+    }
+
+    private static GraphicsPath RoundedPath(Rectangle r, int radius)
+    {
+        radius = Math.Min(radius, Math.Min(r.Width, r.Height) / 2);
+        var diameter = Math.Max(1, radius * 2);
+        var path = new GraphicsPath();
+        path.AddArc(r.Left, r.Top, diameter, diameter, 180, 90);
+        path.AddArc(r.Right - diameter, r.Top, diameter, diameter, 270, 90);
+        path.AddArc(r.Right - diameter, r.Bottom - diameter, diameter, diameter, 0, 90);
+        path.AddArc(r.Left, r.Bottom - diameter, diameter, diameter, 90, 90);
+        path.CloseFigure();
+        return path;
     }
 }
 
