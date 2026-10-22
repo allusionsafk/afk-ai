@@ -101,6 +101,70 @@ def test_partial_runtime_failure_preserves_installed_inventory_but_unknown_loade
     assert report["runtime"]["loaded_state"] == "Unknown"
 
 
+@pytest.mark.parametrize("digest", ["a" * 64, "b" * 64])
+def test_duplicate_loaded_model_identity_keeps_loaded_state_unknown(digest):
+    response = {
+        "/api/version": {"version": "0.34.4"},
+        "/api/tags": {"models": [_tag()]},
+        "/api/ps": {"models": [
+            {"name": "qwen:9b", "digest": digest},
+            {"name": "qwen:9b", "digest": "a" * 64},
+        ]},
+    }
+
+    report = product_utility_ollama.collect_local_report(
+        "qwen:9b", fetch=lambda path, _: response[path], hardware_probe=_pc
+    )
+
+    assert report["runtime"]["inventory_state"] == "Fresh"
+    assert report["models"][0]["installed"] is True
+    assert report["models"][0]["loaded"] is None
+    assert report["runtime"]["loaded_state"] == "Unknown"
+    assert report["runtime"]["errors"] == ["Ollama loaded-model state unavailable"]
+
+
+def test_oversize_loaded_snapshot_cannot_claim_a_model_is_unloaded():
+    loaded = [
+        {"name": f"m{i}:latest", "digest": "b" * 64} for i in range(128)
+    ]
+    loaded.append({"name": "qwen:9b", "digest": "a" * 64})
+    response = {
+        "/api/version": {"version": "0.34.4"},
+        "/api/tags": {"models": [_tag()]},
+        "/api/ps": {"models": loaded},
+    }
+
+    report = product_utility_ollama.collect_local_report(
+        "qwen:9b", fetch=lambda path, _: response[path], hardware_probe=_pc
+    )
+
+    assert report["runtime"]["inventory_state"] == "Fresh"
+    assert report["models"][0]["installed"] is True
+    assert report["models"][0]["loaded"] is None
+    assert report["runtime"]["loaded_state"] == "Unknown"
+    assert report["runtime"]["errors"] == ["Ollama loaded-model state unavailable"]
+
+
+def test_complete_loaded_snapshot_at_limit_remains_fresh():
+    loaded = [
+        {"name": f"m{i}:latest", "digest": "b" * 64} for i in range(127)
+    ]
+    loaded.append({"name": "qwen:9b", "digest": "a" * 64})
+    response = {
+        "/api/version": {"version": "0.34.4"},
+        "/api/tags": {"models": [_tag()]},
+        "/api/ps": {"models": loaded},
+    }
+
+    report = product_utility_ollama.collect_local_report(
+        "qwen:9b", fetch=lambda path, _: response[path], hardware_probe=_pc
+    )
+
+    assert report["models"][0]["loaded"] is True
+    assert report["runtime"]["loaded_state"] == "Fresh"
+    assert report["runtime"]["errors"] == []
+
+
 def test_malformed_tags_are_skipped_and_enrichment_is_bounded():
     called = []
     rows = [_tag(f"m{i}:latest") for i in range(20)]
