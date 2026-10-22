@@ -19,6 +19,16 @@ from urllib.request import Request, urlopen
 from localai.ops import CommandResult, run_command
 from localai.paths import REPO_ROOT, compose_value, repo_path
 from localai.scout_categories import CATEGORIES, Category, category_by_id
+from localai.scout_evidence import (
+    GIB,
+    MAX_CONTEXT,
+    MAX_PARALLEL,
+    QuantArtefact,
+    architecture_kv_gb,
+    estimated_weight_gb,
+    parse_architecture,
+    select_artefact,
+)
 
 AUTHORS = ("unsloth", "bartowski", "lmstudio-community", "Qwen", "ggml-org")
 FAMILIES = (
@@ -359,6 +369,19 @@ def prepare_pick(
     num_ctx: int = DEFAULT_GROUNDED_CTX,
 ) -> int:
     """Pull + ground + benchmark the pick. Never touches the Open WebUI default."""
+    try:
+        _validate_hf_repo(pick.id)
+    except ValueError:
+        say("[!] Invalid download repository identity. Skipping pull.")
+        return 2
+    slots = read_num_parallel()
+    if (
+        type(num_ctx) is not int
+        or not 1 <= num_ctx <= MAX_CONTEXT
+        or slots > MAX_PARALLEL
+    ):
+        say("[!] Invalid requested context or parallel slots. Skipping pull.")
+        return 2
     if pick.size_gb and budget.disk_free_gb < pick.size_gb + 12:
         say(
             f"[!] Low disk (need ~{format_num(pick.size_gb + 12)}GB, have "
@@ -368,8 +391,62 @@ def prepare_pick(
         return 0
 
     repo = pick.id
-    quant = best_quant(repo) or "Q4_K_M"
+    artefact = select_quant_artefact(repo)
+    quant = artefact.quant if artefact else "Q4_K_M"
     say(f"[+] Quant chosen for {format_num(budget.vram_gb)}GB VRAM: {quant}")
+    weights: float | None
+    if artefact and artefact.size_bytes is not None:
+        weights = artefact.size_bytes / GIB
+        say(
+            f"    selected artefact: {format_num(weights)}GB (repository byte metadata)"
+        )
+    else:
+        weights = estimated_weight_gb(pick.total, quant)
+        if weights is None:
+            say("[!] Weight size unavailable. Skipping pull.")
+            log.append(f"- SKIPPED pull (unknown weight size): {pick.id}")
+            return 0
+        say(
+            f"    estimated weights: ~{format_num(weights)}GB "
+            "(parameter estimate with quant floor)"
+        )
+    arch = parse_architecture(fetch_hf_config(repo))
+    # An environment variable in this process does not establish the cache
+    # dtype used by the running Ollama server. Keep the f16 reservation here.
+    kv = (
+        architecture_kv_gb(arch, ctx=num_ctx, parallel=slots)
+        if arch is not None
+        else estimate_kv_gb(
+            pick.total or 70, ctx=num_ctx, parallel=slots, kv_factor=1.0
+        )
+    )
+    provenance = "config architecture" if arch else "parameter estimate"
+    ctx_label = f"{num_ctx // 1024}k"
+    say(
+        f"    estimated KV@{ctx_label}: {format_num(kv)}GB "
+        f"({provenance}, f16, {slots} parallel); not a runtime measurement"
+    )
+    if arch and arch.native_context and num_ctx > arch.native_context:
+        say(
+            f"    note: requested context is above native {arch.native_context}; "
+            "allocation is unverified."
+        )
+    resident = weights + kv
+    if resident > budget.ram_gb - RAM_HEADROOM_GB:
+        say(
+            f"[!] ~{format_num(resident)}GB resident (weights + KV) exceeds "
+            "usable memory. Skipping pull."
+        )
+        log.append(f"- SKIPPED pull (resident memory): {pick.id}")
+        return 0
+    need_gb = max(weights, pick.size_gb or 0) + 12
+    if budget.disk_free_gb < need_gb:
+        say(
+            f"[!] Low disk (need ~{format_num(need_gb)}GB, "
+            f"have {format_num(budget.disk_free_gb)}GB). Skipping pull."
+        )
+        log.append(f"- SKIPPED pull (low disk): {pick.id}")
+        return 0
     if no_pull:
         say("    (--no-pull: skipping the actual download)")
         return 0
@@ -569,35 +646,66 @@ def grounded_modelfile(
 
 def best_quant(repo: str) -> str | None:
     """Pick a ~Q4 quant tag from the repo's GGUF files (None on API failure)."""
+    artefact = select_quant_artefact(repo)
+    return artefact.quant if artefact else None
+
+
+def select_quant_artefact(repo: str) -> QuantArtefact | None:
     try:
-        tree = fetch_hf_tree(repo)
-    except OSError:
+        return select_artefact(fetch_hf_tree(repo), QUANT_PREFERENCE)
+    except (OSError, ValueError):
         return None
-    quants: list[str] = []
-    for entry in tree:
-        if not isinstance(entry, dict):
-            continue
-        path = str(entry.get("path") or "")
-        if not re.search(r"(?i)\.gguf$", path):
-            continue
-        match = re.search(r"(?i)(UD-)?(I?Q\d[0-9A-Z_]*)", path)
-        if match and match.group(0) not in quants:
-            quants.append(match.group(0))
-    for preferred in QUANT_PREFERENCE:
-        for quant in quants:
-            if quant.lower() == preferred.lower():
-                return quant
-    return quants[0] if quants else None
+
+
+def fetch_hf_config(repo: str) -> object | None:
+    try:
+        _validate_hf_repo(repo)
+        return _read_hf_json(f"https://huggingface.co/{repo}/resolve/main/config.json")
+    except (OSError, ValueError):
+        return None
+
+
+def _validate_hf_repo(repo: str) -> None:
+    if not isinstance(repo, str) or not re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9_.-]{0,95}/[A-Za-z0-9][A-Za-z0-9_.-]{0,95}", repo
+    ):
+        raise ValueError("invalid Hugging Face repository identity")
+
+
+def _read_hf_json(url: str, *, complete_tree: bool = False) -> object:
+    request = Request(url, headers={"User-Agent": "localai-model-scout"})
+    with urlopen(request, timeout=15) as response:
+        # Following pagination would make selected-model preparation unbounded.
+        # A partial tree cannot establish all shards or alternate same-quant files.
+        if complete_tree and getattr(response, "headers", {}).get("Link"):
+            raise ValueError("incomplete Hugging Face tree")
+        raw = response.read(4 * 1024**2 + 1)
+    if len(raw) > 4 * 1024**2:
+        raise ValueError("Hugging Face metadata response too large")
+
+    def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("ambiguous Hugging Face metadata")
+            result[key] = value
+        return result
+
+    try:
+        return json.loads(raw, object_pairs_hook=unique_object)
+    except RecursionError as error:
+        raise ValueError("Hugging Face metadata nesting too deep") from error
 
 
 def fetch_hf_tree(repo: str) -> list[object]:
-    request = Request(
-        f"https://huggingface.co/api/models/{repo}/tree/main",
-        headers={"User-Agent": "localai-model-scout"},
+    _validate_hf_repo(repo)
+    payload = _read_hf_json(
+        f"https://huggingface.co/api/models/{repo}/tree/main?recursive=true&limit=1000",
+        complete_tree=True,
     )
-    with urlopen(request, timeout=30) as response:
-        payload = json.loads(response.read().decode("utf-8"))
-    return payload if isinstance(payload, list) else []
+    if not isinstance(payload, list):
+        raise ValueError("invalid Hugging Face tree")
+    return payload
 
 
 def baseline_model() -> str:

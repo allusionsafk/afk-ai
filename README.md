@@ -1,6 +1,6 @@
 # AFK LocalAI for Windows
 
-> Public Beta `0.1.7rc1` · current source candidate `0.2.0-rc1`
+> Public prerelease `0.2.0-rc1` · Windows 11 x64
 
 AFK AI is a local-first AI workspace for Windows 11. It combines Ollama, Open
 WebUI, SearXNG, local voice, hardware-aware model selection, and a guided Windows
@@ -12,15 +12,11 @@ setup path.
 
 ## Release authority
 
-The public Beta is pinned separately from development. The project website
-remains the download authority for `0.1.7rc1`; branches, pull requests, and the
-`0.2.0-rc1` source candidate can contain work that is not included in the current
-download.
-
-The `0.2.0-rc1` source candidate defines a conventional Windows installer named
-`AFKLocalAISetup-0.2.0-rc1-x64.exe`. It is not a published candidate until exact
-installer bytes pass lifecycle qualification and are attached to the matching
-prerelease with their SHA-256 file. See the
+The public download is pinned separately from development. The published
+[v0.2.0-rc1 prerelease](https://github.com/allusionsafk/afk-ai/releases/tag/v0.2.0-rc1)
+contains `AFKLocalAISetup-0.2.0-rc1-x64.exe`, its SHA-256 sidecar, payload
+manifest, and lifecycle reports. The installer is 58,367,121 bytes. Branches and
+pull requests can contain later work that is absent from those bytes. See the
 [candidate notes](docs/releases/0.2.0-rc1.md) and
 [install, upgrade, and uninstall contract](docs/install-upgrade-uninstall.md).
 
@@ -28,8 +24,8 @@ prerelease with their SHA-256 file. See the
 
 | | |
 |---|---|
-| Public status | Beta `0.1.7rc1` |
-| Source candidate | `0.2.0-rc1` (not yet the public download) |
+| Public status | Prerelease `0.2.0-rc1` |
+| Source development | `master` and feature branches can be ahead of the published EXE |
 | Primary target | Windows 11 with an NVIDIA GPU |
 | CPU-only path | Smaller models with slower generation |
 | Chat | Open WebUI at `http://localhost:3000` |
@@ -44,13 +40,11 @@ Download AFK AI from the
 The website serves pinned Beta bytes after verifying their SHA-256. It does not
 use GitHub `releases/latest` as the AFK AI version authority.
 
-The source file remains named `Install Local AI.cmd` for compatibility. The
-website serves the same pinned bytes as `Install AFK AI.cmd`. Run the downloaded
-installer and follow the prompts. Windows may warn about the unsigned Beta
-script; the file can be inspected before it is run.
-
-If Smart App Control blocks the script, do not disable Smart App Control for the
-beta. Use the inspectable source/bootstrap route instead.
+Run the downloaded `AFKLocalAISetup-0.2.0-rc1-x64.exe` and follow the prompts.
+The old CMD bootstrap remains in the source tree for engineering compatibility;
+it is no longer the pinned public download. Code signing remains outstanding.
+If Windows blocks the installer, keep security features enabled and report the
+exact warning through [Support](SUPPORT.md).
 
 ## Guided `0.2.0-rc1` first run
 
@@ -144,6 +138,15 @@ A successful load does not by itself mean a model is a good fit. Architecture,
 quantization, context length, KV cache, runtime overhead, RAM, VRAM, and offload
 all matter.
 
+The source Prepare path checks the selected GGUF file or complete shard set
+using repository byte metadata before downloading. For supported conventional
+attention architectures, it derives a conservative f16 KV estimate at the
+requested context and parallel count. Missing or ambiguous metadata retains
+parameter estimates. These checks can reject a download that exceeds the
+memory or disk budget; they do not measure runtime allocation or certify speed.
+Scout category ranking still uses estimates, and repository `main` can change
+between the metadata check and Ollama's download.
+
 ## Development
 
 For a source checkout:
@@ -195,8 +198,8 @@ models, prune Docker, delete volumes, or remove preserved user state.
 | [Support](SUPPORT.md) | Support scope and issue routing |
 | [Security](SECURITY.md) | Private vulnerability reporting |
 | [Contributing](CONTRIBUTING.md) | Contribution and test expectations |
-| [Beta 0.1.7 notes](docs/releases/0.1.7rc1.md) | Current public candidate |
-| [0.2.0 source candidate notes](docs/releases/0.2.0-rc1.md) | Unpublished source-candidate scope |
+| [Beta 0.1.7 notes](docs/releases/0.1.7rc1.md) | Historical CMD candidate |
+| [0.2.0 prerelease notes](docs/releases/0.2.0-rc1.md) | Published EXE identity and qualification limits |
 | [Installer guide](installer/README.md) | Native distribution architecture |
 | [WebBrain guide](docs/webbrain.md) | Browser and search integration |
 
