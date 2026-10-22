@@ -172,15 +172,17 @@ def collect_local_report(
     try:
         loaded_response = fetch("/api/ps", None)
         loaded_rows = loaded_response.get("models")
-        if not isinstance(loaded_rows, list):
+        if not isinstance(loaded_rows, list) or len(loaded_rows) > MAX_MODELS:
             raise ValueError("invalid loaded model list")
         loaded_map: dict[str, str] = {}
-        for row in loaded_rows[:MAX_MODELS]:
+        for row in loaded_rows:
             if not isinstance(row, dict):
                 raise ValueError("invalid loaded model")
             name, digest = row.get("name"), _digest(row.get("digest"))
             if not isinstance(name, str) or not valid_model_tag(name) or digest is None:
                 raise ValueError("invalid loaded identity")
+            if name in loaded_map:
+                raise ValueError("duplicate loaded identity")
             loaded_map[name] = digest
         loaded: dict[str, str] | None = loaded_map
         loaded_state = "Fresh"
