@@ -669,9 +669,9 @@ def create_app() -> FastAPI:
 
     @app.post("/api/scout/refresh")
     def scout_refresh() -> dict[str, Any]:
-        # Scout is seconds-scale HF calls (no download), so it runs in-request
-        # and rewrites the cache the GET reads. Prepare, which pulls GBs, does
-        # not - that goes through /api/scout/prepare into its own console.
+        # Scout fetches bounded metadata (no model download) in a worker
+        # thread and rewrites the dated cache. Socket timeouts are not a total
+        # refresh deadline. Prepare uses its own console for multi-GB pulls.
         code, lines = collect_model_scout_report(mode="Scout", quiet=True, top_n=3)
         cache = read_scout_groups() or {"generated": None, "groups": None}
         return {
