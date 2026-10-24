@@ -212,6 +212,13 @@ class Candidate:
     size_gb: float | None = None
     fit_why: str = ""
     score: float = 0
+    fit_stage: str = "provisional"
+    weight_source: str = "parameter-estimate"
+    kv_source: str = "parameter-estimate"
+    quant: str | None = None
+    weight_gb: float | None = None
+    kv_gb: float | None = None
+    metadata_status: str = "not-checked"
 
 
 def collect_model_scout_report(
@@ -270,7 +277,14 @@ def collect_model_scout_report(
     for message in notes:
         say(f"    {message}")
 
-    groups = collect_scout_groups(budget, candidates)
+    from localai.scout_finalists import collect_final_scout_groups
+
+    slots = read_num_parallel()
+    if slots > MAX_PARALLEL:
+        say("[!] Invalid parallel slot count. Skipping final recommendations.")
+        return 2, lines
+    say("[*] Checking a bounded shortlist; fits are estimates, not runtime evidence.")
+    groups = collect_final_scout_groups(budget, candidates, parallel=slots)
     for category_def in CATEGORIES:
         result = groups[category_def.id]
         say("")
@@ -288,7 +302,7 @@ def collect_model_scout_report(
             extra = len(result.dropped) - len(shown)
             suffix = f" (+{extra} more)" if extra > 0 else ""
             say(f"  dropped {len(result.dropped)} for VRAM: {joined}{suffix}")
-    write_scout_groups(groups, now=stamp)
+    write_scout_groups(groups, now=stamp, budget=budget, parallel=slots)
 
     exit_code = 0
     prepare_log: list[str] = []
@@ -893,10 +907,10 @@ def discover_candidates(
 
     by_key: dict[str, Candidate] = {}
     for candidate in rows:
-        key = re.sub(r"[^a-z0-9]", "", candidate.name.lower())
+        key = candidate.id
         if key not in by_key or candidate.score > by_key[key].score:
             by_key[key] = candidate
-    return sorted(by_key.values(), key=lambda item: item.score, reverse=True)
+    return sorted(by_key.values(), key=lambda item: (-item.score, item.id))
 
 
 def fetch_hf_models(author: str) -> list[object]:
@@ -1292,6 +1306,14 @@ def _candidate_to_dict(candidate: Candidate | None) -> dict[str, object] | None:
         "downloads": candidate.downloads,
         "family": candidate.family,
         "why": candidate.fit_why,
+        "fitStage": candidate.fit_stage,
+        "weightSource": candidate.weight_source,
+        "kvSource": candidate.kv_source,
+        "quant": candidate.quant,
+        "runtimeStatus": "unverified",
+        "weightGb": candidate.weight_gb,
+        "kvGb": candidate.kv_gb,
+        "metadataStatus": candidate.metadata_status,
     }
 
 
@@ -1311,27 +1333,27 @@ def groups_to_dict(groups: dict[str, CategoryResult]) -> dict[str, object]:
     }
 
 
-def write_scout_groups(groups: dict[str, CategoryResult], *, now: datetime) -> None:
+def write_scout_groups(
+    groups: dict[str, CategoryResult], *, now: datetime,
+    budget: Budget | None = None, parallel: int = 1,
+) -> None:
     """Persist the grouped report the dashboard reads (logs/model-scout-groups.json)."""
-    path = repo_path("logs", "model-scout-groups.json")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "generated": now.strftime("%Y-%m-%d %H:%M"),
-        "groups": groups_to_dict(groups),
-    }
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    from localai.scout_cache import write_snapshot
+
+    if budget is None:
+        raise ValueError("final snapshot requires hardware fit inputs")
+    write_snapshot(
+        repo_path("logs", "model-scout-groups.json"),
+        groups_to_dict(groups), now=now, ram_gb=budget.ram_gb,
+        vram_gb=budget.vram_gb, parallel=parallel,
+    )
 
 
 def read_scout_groups() -> dict[str, object] | None:
     """The cached grouped report, or None when the scout has not run yet."""
-    path = repo_path("logs", "model-scout-groups.json")
-    if not path.exists():
-        return None
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    return data if isinstance(data, dict) else None
+    from localai.scout_cache import read_snapshot
+
+    return read_snapshot(repo_path("logs", "model-scout-groups.json"))
 
 
 def fit_candidate(

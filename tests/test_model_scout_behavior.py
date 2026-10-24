@@ -11,6 +11,14 @@ from localai import model_scout, scout_categories
 from localai.ops import CommandResult
 
 
+@pytest.fixture(autouse=True)
+def no_live_scout_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Grouping now performs bounded remote enrichment. Individual reader tests
+    # supply real tree fixtures below; no behavior test should reach live HF.
+    monkeypatch.setattr(model_scout, "fetch_hf_tree", lambda repo: [])
+    monkeypatch.setattr(model_scout, "fetch_hf_config", lambda repo: None)
+
+
 def test_model_scout_parse_and_fit_moe_candidate() -> None:
     candidate = model_scout.parse_model("unsloth/Qwen3.6-35B-A3B-GGUF")
     budget = model_scout.Budget(ram_gb=32, vram_gb=12, disk_free_gb=100)
@@ -989,8 +997,12 @@ def test_write_scout_groups_writes_cache(
     monkeypatch.setattr(
         model_scout, "repo_path", lambda *parts: tmp_path.joinpath(*parts)
     )
-    groups = model_scout.collect_scout_groups(_budget(), [], parallel=1, kv_factor=0.5)
-    model_scout.write_scout_groups(groups, now=datetime(2026, 7, 8, 12, 0))
+    from localai.scout_finalists import collect_final_scout_groups
+
+    groups = collect_final_scout_groups(_budget(), [])
+    model_scout.write_scout_groups(
+        groups, now=datetime(2026, 7, 8, 12, 0), budget=_budget()
+    )
     cache = tmp_path / "logs" / "model-scout-groups.json"
     assert cache.exists()
     data = json.loads(cache.read_text(encoding="utf-8"))
@@ -1005,8 +1017,12 @@ def test_read_scout_groups_roundtrips(
         model_scout, "repo_path", lambda *parts: tmp_path.joinpath(*parts)
     )
     assert model_scout.read_scout_groups() is None  # no cache yet
-    groups = model_scout.collect_scout_groups(_budget(), [], parallel=1, kv_factor=0.5)
-    model_scout.write_scout_groups(groups, now=datetime(2026, 7, 8, 12, 0))
+    from localai.scout_finalists import collect_final_scout_groups
+
+    groups = collect_final_scout_groups(_budget(), [])
+    model_scout.write_scout_groups(
+        groups, now=datetime(2026, 7, 8, 12, 0), budget=_budget()
+    )
     data = model_scout.read_scout_groups()
     assert data is not None
     assert data["generated"].startswith("2026-07-08")

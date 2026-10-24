@@ -144,8 +144,25 @@ attention architectures, it derives a conservative f16 KV estimate at the
 requested context and parallel count. Missing or ambiguous metadata retains
 parameter estimates. These checks can reject a download that exceeds the
 memory or disk budget; they do not measure runtime allocation or certify speed.
-Scout category ranking still uses estimates, and repository `main` can change
-between the metadata check and Ollama's download.
+Scout first ranks discoveries cheaply, then checks at most three remote
+finalists per category and reranks that bounded shortlist using the same
+artifact and architecture evidence. Each repository is checked once per run;
+unavailable metadata keeps conservative parameter estimates. Curated fallbacks
+remain unverified, and unknown size is never promoted to an assumed fit. The
+source and conservative f16 KV estimate appear in each recommendation's details.
+Remote enrichment admits at most six repositories (12 metadata requests),
+visiting category first choices before second choices. After an eight-second
+admission window no new repository check starts; in-flight reads can outlast
+that window. Unchecked finalists retain explicitly marked heuristic estimates.
+This is not an exhaustive search or a runtime compatibility, allocation, speed,
+or Ready test. Repository `main` can change between the check and Ollama's download.
+
+The dashboard cache is a dated estimate snapshot with its RAM, VRAM, parallel
+count and category contexts. Its fingerprint detects internal inconsistencies;
+it does not authenticate upstream metadata or verify the current machine. Old
+or malformed snapshots require a Scout refresh. Prepare checks fresh metadata
+again. Metadata reads have a 15-second socket timeout and 4 MiB response limit;
+the request-count limit does not establish a total Scout refresh deadline.
 
 ## Development
 
