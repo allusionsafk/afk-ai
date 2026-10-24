@@ -47,9 +47,10 @@ documents.
 
 ## Version scope
 
-The current public Beta is `v0.1.7rc1`. The repository also contains an
-unpublished `v0.2.0-rc1` source candidate. Development on `master` can move ahead
-of either record, so every report should identify the exact tag or commit tested.
+The current public prerelease is `v0.2.0-rc1`, distributed as an EXE with a
+published SHA-256 sidecar. `v0.1.7rc1` is the historical CMD candidate.
+Development on `master` can move ahead of the published installer, so every
+report should identify the exact installer hash, tag, or commit tested.
 
 For installation, hardware, or ordinary product bugs, use
 [SUPPORT.md](SUPPORT.md).

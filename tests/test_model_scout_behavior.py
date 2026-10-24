@@ -11,6 +11,14 @@ from localai import model_scout, scout_categories
 from localai.ops import CommandResult
 
 
+@pytest.fixture(autouse=True)
+def no_live_scout_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Grouping now performs bounded remote enrichment. Individual reader tests
+    # supply real tree fixtures below; no behavior test should reach live HF.
+    monkeypatch.setattr(model_scout, "fetch_hf_tree", lambda repo: [])
+    monkeypatch.setattr(model_scout, "fetch_hf_config", lambda repo: None)
+
+
 def test_model_scout_parse_and_fit_moe_candidate() -> None:
     candidate = model_scout.parse_model("unsloth/Qwen3.6-35B-A3B-GGUF")
     budget = model_scout.Budget(ram_gb=32, vram_gb=12, disk_free_gb=100)
@@ -282,6 +290,12 @@ def test_grounded_model_name_encodes_nondefault_ctx() -> None:
     assert not model_scout.grounded_model_name(candidate, num_ctx=8192).endswith("k")
 
 
+def _stub_selected_metadata(monkeypatch: pytest.MonkeyPatch, quant: str | None) -> None:
+    tree = [{"path": f"model-{quant}.gguf"}] if quant else []
+    monkeypatch.setattr(model_scout, "fetch_hf_tree", lambda repo: tree)
+    monkeypatch.setattr(model_scout, "fetch_hf_config", lambda repo: None)
+
+
 def test_prepare_pick_threads_num_ctx_to_modelfile(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -289,7 +303,7 @@ def test_prepare_pick_threads_num_ctx_to_modelfile(
     monkeypatch.setattr(
         model_scout, "repo_path", lambda *parts: tmp_path.joinpath(*parts)
     )
-    monkeypatch.setattr(model_scout, "best_quant", lambda repo: "Q4_K_M")
+    _stub_selected_metadata(monkeypatch, "Q4_K_M")
     monkeypatch.setattr(model_scout, "baseline_model", lambda: "qwen-base")
     monkeypatch.setattr(model_scout, "model_present", lambda model, **kwargs: False)
     monkeypatch.setattr(model_scout, "stop_model", lambda model, **kwargs: None)
@@ -410,7 +424,7 @@ def test_collect_prepare_no_pull_streams_lines_live(
         lambda **kwargs: log_calls.append(kwargs),
     )
     monkeypatch.setattr(model_scout, "write_scout_groups", lambda groups, **kw: None)
-    monkeypatch.setattr(model_scout, "best_quant", lambda repo: "UD-Q4_K_XL")
+    _stub_selected_metadata(monkeypatch, "UD-Q4_K_XL")
 
     echoed: list[str] = []
     code, lines = model_scout.collect_model_scout_report(
@@ -462,7 +476,7 @@ def test_prepare_pick_pulls_grounds_benchmarks_and_records(
     monkeypatch.setattr(
         model_scout, "repo_path", lambda *parts: tmp_path.joinpath(*parts)
     )
-    monkeypatch.setattr(model_scout, "best_quant", lambda repo: "Q4_K_M")
+    _stub_selected_metadata(monkeypatch, "Q4_K_M")
     monkeypatch.setattr(model_scout, "baseline_model", lambda: "qwen-base")
     monkeypatch.setattr(
         model_scout, "model_present", lambda model, **kwargs: model == "qwen-base"
@@ -534,7 +548,7 @@ def test_prepare_pick_reports_pull_failure(
     monkeypatch.setattr(
         model_scout, "repo_path", lambda *parts: tmp_path.joinpath(*parts)
     )
-    monkeypatch.setattr(model_scout, "best_quant", lambda repo: None)
+    _stub_selected_metadata(monkeypatch, None)
     monkeypatch.setattr(
         model_scout,
         "run_ollama",
@@ -983,8 +997,12 @@ def test_write_scout_groups_writes_cache(
     monkeypatch.setattr(
         model_scout, "repo_path", lambda *parts: tmp_path.joinpath(*parts)
     )
-    groups = model_scout.collect_scout_groups(_budget(), [], parallel=1, kv_factor=0.5)
-    model_scout.write_scout_groups(groups, now=datetime(2026, 7, 8, 12, 0))
+    from localai.scout_finalists import collect_final_scout_groups
+
+    groups = collect_final_scout_groups(_budget(), [])
+    model_scout.write_scout_groups(
+        groups, now=datetime(2026, 7, 8, 12, 0), budget=_budget()
+    )
     cache = tmp_path / "logs" / "model-scout-groups.json"
     assert cache.exists()
     data = json.loads(cache.read_text(encoding="utf-8"))
@@ -999,8 +1017,12 @@ def test_read_scout_groups_roundtrips(
         model_scout, "repo_path", lambda *parts: tmp_path.joinpath(*parts)
     )
     assert model_scout.read_scout_groups() is None  # no cache yet
-    groups = model_scout.collect_scout_groups(_budget(), [], parallel=1, kv_factor=0.5)
-    model_scout.write_scout_groups(groups, now=datetime(2026, 7, 8, 12, 0))
+    from localai.scout_finalists import collect_final_scout_groups
+
+    groups = collect_final_scout_groups(_budget(), [])
+    model_scout.write_scout_groups(
+        groups, now=datetime(2026, 7, 8, 12, 0), budget=_budget()
+    )
     data = model_scout.read_scout_groups()
     assert data is not None
     assert data["generated"].startswith("2026-07-08")
