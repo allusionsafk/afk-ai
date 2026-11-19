@@ -6,7 +6,7 @@ AFK AI is a local-first AI workspace for Windows 11. It combines Ollama, Open
 WebUI, SearXNG, local voice, hardware-aware model selection, and a guided Windows
 setup path.
 
-[Download](https://localai-windows-starter-site.allusionsafk.workers.dev/) |
+[AFK AI for Windows](https://allusions.pages.dev/ai/) |
 [Support](SUPPORT.md) | [Security](SECURITY.md) |
 [Contributing](CONTRIBUTING.md)
 
@@ -36,7 +36,7 @@ pull requests can contain later work that is absent from those bytes. See the
 ## Install the public Beta
 
 Download AFK AI from the
-[project website](https://localai-windows-starter-site.allusionsafk.workers.dev/).
+[canonical product page](https://allusions.pages.dev/ai/).
 The website serves pinned Beta bytes after verifying their SHA-256. It does not
 use GitHub `releases/latest` as the AFK AI version authority.
 
