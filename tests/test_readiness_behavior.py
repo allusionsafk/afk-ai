@@ -15,6 +15,8 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from localai import readiness
 from localai.ops import CommandResult
 
@@ -514,6 +516,22 @@ def test_a_model_that_generates_nothing_is_not_ready(tmp_path: Path) -> None:
 
     assert status.state == readiness.DEGRADED
     assert status.reason == "INFERENCE_FAILED"
+
+
+@pytest.mark.parametrize("done,token_count", [("false", 8), (1, 8), (True, True)])
+def test_malformed_inference_cannot_qualify_chat(
+    tmp_path: Path, done: object, token_count: object
+) -> None:
+    def post(
+        url: str, payload: dict[str, Any], *, timeout_sec: float
+    ) -> tuple[int, str]:
+        return 200, json.dumps({"done": done, "eval_count": token_count})
+
+    status = _status(_install(tmp_path), inference=post)
+
+    assert status.state == readiness.DEGRADED
+    assert status.reason == "INFERENCE_FAILED"
+    assert status.chat_ready is False
 
 
 def test_every_reason_the_collector_emits_has_a_next_action() -> None:
