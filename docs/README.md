@@ -11,19 +11,21 @@ reports belong in [SECURITY.md](../SECURITY.md).
 
 | Document | Purpose |
 |---|---|
-| [Beta 0.1.7rc1](releases/0.1.7rc1.md) | Pinned public candidate, qualification status, and known limitations |
+| [Prerelease 0.2.0-rc1](releases/0.2.0-rc1.md) | Published EXE identity, qualification status, and known limitations |
+| [Beta 0.1.7rc1](releases/0.1.7rc1.md) | Historical CMD candidate |
 | [Installer guide](../installer/README.md) | Bootstrap and installer architecture |
 | [Virtualization and Docker preflight](design/virtualization-docker-preflight.md) | Reviewed first-run classification and recovery contract |
 | [WebBrain guide](webbrain.md) | Browser and search integration, privacy boundary, and network behaviour |
 
 ## Current source-candidate records
 
-These records describe `0.2.0-rc1` source work. They do not replace the website
-pin or prove that candidate installer bytes have been published.
+These contracts describe source behavior, which may include work after the
+published `0.2.0-rc1` EXE. The named release record identifies the public bytes;
+source activity does not update the website pin or certify a new installer.
 
 | Document | Purpose |
 |---|---|
-| [0.2.0-rc1 candidate notes](releases/0.2.0-rc1.md) | Prerelease scope, qualification policy, and external-machine gap |
+| [0.2.0-rc1 prerelease notes](releases/0.2.0-rc1.md) | Public bytes, qualification policy, and external-machine gap |
 | [Install, upgrade, and uninstall](install-upgrade-uninstall.md) | Program/state locations and lifecycle boundaries |
 | [Windows distribution](../installer/README.md) | Native shell, Inno package, deterministic payload, and release discipline |
 | [Product shell and app-owned runtime](design/product-shell-runtime.md) | Status contract, Open Chat gate, bundled Python trust chain, ownership categories, diagnostics privacy |

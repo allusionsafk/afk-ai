@@ -1,8 +1,9 @@
 # AFK LocalAI support
 
-The current public AFK AI Beta is `0.1.7rc1`. The repository also
-contains an unpublished `0.2.0-rc1` source candidate; always report the exact
-version, tag, branch, or commit you tested.
+The current public AFK AI prerelease is `0.2.0-rc1`, distributed as
+`AFKLocalAISetup-0.2.0-rc1-x64.exe`. Source development can be ahead of that
+published installer; always report the exact version, tag, branch, or commit
+you tested. See the [release record](docs/releases/0.2.0-rc1.md) for its hash.
 
 Support is focused on reproducible Windows installation, runtime, chat, model,
 and hardware problems.
@@ -27,11 +28,11 @@ requests.
 
 Use the **Installation / setup problem** issue form.
 
-Before reporting a `0.2.0-rc1` source-candidate setup problem, launch AFK LocalAI
+Before reporting a `0.2.0-rc1` setup problem, launch AFK LocalAI
 again. A partial setup should return to its saved checkpoint and recheck the live
 machine. If Windows requested a restart, restart before choosing **Try again**.
 
-The source candidate provides **Start Menu → AFK LocalAI → Diagnostics**. Review
+Use **Start Menu → AFK LocalAI → Diagnostics**. Review
 the generated report before attaching it; it should contain only the bounded
 environment evidence needed for support.
 

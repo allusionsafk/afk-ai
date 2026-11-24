@@ -67,15 +67,17 @@ starts isolated. It is staged before the payload manifest is computed, so every
 runtime file is hashed. To move to a new CPython release, update every field of
 the pin together and re-run the full gate and lifecycle qualification.
 
-## Downloadable launcher
+## Historical CMD launcher
 
-`Install Local AI.cmd` (served by the website as `Install AFK AI.cmd`) runs the
+`Install Local AI.cmd` (historically served as `Install AFK AI.cmd`) runs the
 repository's own `bootstrap.ps1` when it sits in a checkout. Downloaded alone,
 it fetches `bootstrap.ps1` from an immutable commit and verifies its SHA-256
 before Windows PowerShell may run it. Release pin order is: tag the release,
-pin `bootstrap.ps1` to that tag's commit and zip digest, pin the launcher to the
-commit and digest of that `bootstrap.ps1`, then repin the website to the
-launcher bytes.
+pin `bootstrap.ps1` to that tag's commit and zip digest, then pin the launcher
+to the commit and digest of that `bootstrap.ps1`. This legacy chain is retained
+for source compatibility. The public `0.2.0-rc1` download is the EXE described in
+the [release record](../docs/releases/0.2.0-rc1.md); this CMD procedure does not
+change its download pin.
 
 ## Validation and release
 

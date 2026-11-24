@@ -479,14 +479,23 @@ def probe_tiny_inference(
     # text in "thinking". Requiring response text called a working runtime
     # broken - found by running this against the real machine, not in a fixture.
     generated = payload.get("eval_count")
-    tokens = generated if isinstance(generated, int) else 0
-    if not payload.get("done") or tokens <= 0:
+    tokens = (
+        generated
+        if isinstance(generated, int) and not isinstance(generated, bool)
+        else 0
+    )
+    if payload.get("done") is not True or tokens <= 0:
         reason = str(payload.get("done_reason") or "no tokens generated")[:40]
         return False, f"inference produced nothing ({reason})"
 
-    text = str(payload.get("response", "")).strip()
-    thinking = str(payload.get("thinking", "")).strip()
-    shape = "text" if text else ("reasoning" if thinking else "tokens")
+    text = payload.get("response")
+    thinking = payload.get("thinking")
+    if isinstance(text, str) and text.strip():
+        shape = "text"
+    elif isinstance(thinking, str) and thinking.strip():
+        shape = "reasoning"
+    else:
+        shape = "tokens"
     # Only the SHAPE of the answer is reported: the generated text itself is
     # never copied into status or diagnostics.
     return True, f"inference ok ({tokens} tokens, {shape})"
